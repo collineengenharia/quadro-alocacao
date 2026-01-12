@@ -1,0 +1,1795 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { format, addDays, subDays, parseISO } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import {
+  Calendar as CalendarIcon,
+  ChevronLeft,
+  ChevronRight,
+  LayoutDashboard,
+  PieChart as PieChartIcon,
+  Upload,
+  FileJson,
+  Camera,
+  Settings,
+  Building2,
+  Users,
+  X
+} from 'lucide-react';
+import html2canvas from 'html2canvas';
+import { saveAs } from 'file-saver';
+import { jsPDF } from 'jspdf';
+import { ResourceSettings } from './components/ResourceSettings';
+import { AnalyticalDashboard } from './components/AnalyticalDashboard';
+import { WorksiteSettings } from './components/WorksiteSettings';
+import { HourSplitModal } from './components/HourSplitModal';
+
+import type { Resource, Worksite, OvertimeData, OvertimeEntry, ResourceLinks, MaintenanceData, PartialAllocationsData } from './types';
+
+interface AllocationData {
+  [dateKey: string]: { [resourceId: string]: string };
+}
+
+interface WorksiteVisibilityData {
+  [dateKey: string]: { [worksiteId: string]: boolean };
+}
+
+interface AllocationMetadata {
+  [dateKey: string]: {
+    isFinalAllocation?: boolean;
+    observations?: string;
+  };
+}
+
+interface ObservationsData {
+  [date: string]: {
+    [workSiteId: string]: string;
+  }
+}
+
+
+
+const DEFAULT_WORKSITES: Worksite[] = [
+  { id: 'obra-1', name: 'Edifício Horizonte', color: 'obra-1', visible: true },
+  { id: 'obra-2', name: 'Vila das Flores', color: 'obra-2', visible: true },
+  { id: 'obra-3', name: 'Rodovia Sul', color: 'obra-3', visible: true },
+  { id: 'obra-4', name: 'Shopping Novo', color: 'obra-4', visible: true },
+  { id: 'obra-5', name: 'Complexo Industrial', color: 'obra-5', visible: true },
+];
+
+const ResourceCard = ({ resource, onDragStart, onDragEnd, onClick, isSelected, onToggleMaintenance, onOvertime, hasOvertime, linkedResource, inMaintenance, onHourSplit, allocatedHours, dragId }: {
+  resource: Resource,
+  onDragStart: (e: React.DragEvent, id: string) => void,
+  onDragEnd: (e: React.DragEvent) => void,
+  onClick?: () => void,
+  isSelected?: boolean,
+  onToggleMaintenance?: (id: string) => void,
+  onOvertime?: (id: string) => void,
+  hasOvertime?: boolean,
+  linkedResource?: Resource,
+  inMaintenance?: boolean,
+  onHourSplit?: (id: string) => void,
+  allocatedHours?: number,
+  dragId?: string
+}) => {
+
+  const isDraggable = (!inMaintenance) || (!!dragId);
+
+  return (
+    <div
+      draggable={isDraggable}
+      onDragStart={(e) => isDraggable && onDragStart(e, dragId || resource.id)}
+      onDragEnd={onDragEnd}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!inMaintenance) onClick?.();
+      }}
+      className={`resource-card animate-scale-in ${isSelected ? 'ring-2 ring-blue-500 ring-offset-2' : ''} ${inMaintenance ? 'in-maintenance' : ''}`}
+      style={{
+        cursor: isDraggable ? 'grab' : 'not-allowed',
+        position: 'relative',
+        opacity: inMaintenance && !dragId ? 0.7 : 1 // Menor opacidade apenas se bloqueado de verdade
+      }}
+    >
+      {resource.type === 'machine' && onToggleMaintenance && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleMaintenance(resource.id);
+          }}
+          style={{
+            position: 'absolute',
+            top: '4px',
+            right: '4px',
+            background: inMaintenance ? '#fb923c' : '#f1f5f9',
+            border: 'none',
+            borderRadius: '6px',
+            padding: '4px 6px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            zIndex: 10,
+            transition: 'all 0.2s'
+          }}
+          title={inMaintenance ? "Retornar ao Serviço" : "Marcar em Manutenção"}
+        >
+          🔧
+        </button>
+      )}
+
+      {/* Botão de Divisão de Horas (Esquerda Superior) */}
+      {!inMaintenance && onHourSplit && (
+        allocatedHours ? (
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              onHourSplit(resource.id);
+            }}
+            style={{
+              position: 'absolute',
+              top: '4px',
+              left: '4px',
+              background: 'rgba(139, 92, 246, 0.9)',
+              color: 'white',
+              borderRadius: '8px',
+              padding: '2px 6px',
+              cursor: 'pointer',
+              fontSize: '10px',
+              fontWeight: 'bold',
+              fontFamily: 'monospace',
+              zIndex: 10,
+              boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)'
+            }}
+            title="Editar Carga Horária"
+          >
+            {allocatedHours}h
+          </div>
+        ) : (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onHourSplit(resource.id);
+            }}
+            style={{
+              position: 'absolute',
+              top: '4px',
+              left: '4px',
+              background: '#f1f5f9',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '4px 6px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              zIndex: 10,
+              transition: 'all 0.2s',
+              color: '#8b5cf6'
+            }}
+            title="Dividir Carga Horária"
+          >
+            ⏱️
+          </button>
+        )
+      )}
+
+      {resource.type === 'employee' && onOvertime && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onOvertime(resource.id);
+          }}
+          style={{
+            position: 'absolute',
+            top: '4px',
+            right: '4px',
+            background: hasOvertime ? '#3b82f6' : '#f1f5f9',
+            color: hasOvertime ? 'white' : '#64748b',
+            border: 'none',
+            borderRadius: '6px',
+            padding: '4px 6px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            zIndex: 10,
+            transition: 'all 0.2s',
+            boxShadow: hasOvertime ? '0 2px 6px rgba(59, 130, 246, 0.4)' : 'none'
+          }}
+          title="Lançar Horas Extras"
+        >
+          {hasOvertime ? '💲' : '💲'}
+        </button>
+      )}
+      {inMaintenance && (
+        <div style={{
+          position: 'absolute',
+          top: '28px',
+          right: '4px',
+          background: '#fb923c',
+          color: 'white',
+          fontSize: '8px',
+          padding: '2px 4px',
+          borderRadius: '4px',
+          fontWeight: '800',
+          zIndex: 10
+        }}>
+          MANUTENÇÃO
+        </div>
+      )}
+      {resource.isAdministrative && (
+        <div style={{
+          position: 'absolute',
+          top: '4px',
+          left: '4px',
+          background: '#64748b',
+          color: 'white',
+          fontSize: '8px',
+          padding: '2px 4px',
+          borderRadius: '4px',
+          fontWeight: '800',
+          zIndex: 10
+        }}>
+          ADM
+        </div>
+      )}
+      <img
+        src={resource.photo}
+        alt={resource.name}
+        className={`resource-card-photo ${resource.type}`}
+      />
+      <div className="resource-card-name">{resource.name}</div>
+      <div className="resource-card-role">{resource.role}</div>
+
+      {resource.type === 'machine' && linkedResource && (
+        <div style={{
+          marginTop: '6px',
+          paddingTop: '6px',
+          borderTop: '1px solid #e2e8f0',
+          fontSize: '10px',
+          fontWeight: '700',
+          color: '#3b82f6',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px'
+        }}>
+          👤 {linkedResource.name}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const OvertimeModal = ({ resource, currentOvertime, onSave, onDelete, onClose }: {
+  resource: Resource,
+  currentOvertime?: OvertimeEntry,
+  onSave: (entry: OvertimeEntry) => void,
+  onDelete: () => void,
+  onClose: () => void
+}) => {
+  const [hours, setHours] = useState(currentOvertime?.hours.toString() || '');
+  const [multiplier, setMultiplier] = useState<1.5 | 2.0>(currentOvertime?.multiplier || 1.5);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const h = parseFloat(hours);
+    if (isNaN(h) || h <= 0) return;
+    onSave({ hours: h, multiplier });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose} style={{ zIndex: 1000 }}>
+      <div className="modal-content animate-fade-in" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px' }}>
+        <div className="modal-header">
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '20px', fontWeight: '800' }}>
+            ⌚ Horas Extras: {resource.name}
+          </h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}>
+            <X size={24} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} style={{ marginTop: '24px' }}>
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', fontSize: '14px', fontWeight: '700', color: '#1e293b', marginBottom: '8px' }}>
+              Quantidade de Horas
+            </label>
+            <input
+              type="number"
+              step="0.5"
+              value={hours}
+              onChange={(e) => setHours(e.target.value)}
+              placeholder="Ex: 2 ou 2.5"
+              autoFocus
+              style={{
+                width: '100%',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                border: '2px solid #e2e8f0',
+                fontSize: '16px',
+                outline: 'none',
+                transition: 'border-color 0.2s'
+              }}
+            />
+          </div>
+          <div style={{ marginBottom: '24px' }}>
+            <label style={{ display: 'block', fontSize: '14px', fontWeight: '700', color: '#1e293b', marginBottom: '8px' }}>
+              Tipo de Adicional
+            </label>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setMultiplier(1.5)}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: '12px',
+                  border: '2px solid',
+                  borderColor: multiplier === 1.5 ? '#3b82f6' : '#e2e8f0',
+                  background: multiplier === 1.5 ? '#eff6ff' : 'white',
+                  color: multiplier === 1.5 ? '#1d4ed8' : '#64748b',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                50% (Normal)
+              </button>
+              <button
+                type="button"
+                onClick={() => setMultiplier(2.0)}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: '12px',
+                  border: '2px solid',
+                  borderColor: multiplier === 2.0 ? '#ef4444' : '#e2e8f0',
+                  background: multiplier === 2.0 ? '#fef2f2' : 'white',
+                  color: multiplier === 2.0 ? '#dc2626' : '#64748b',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                100% (Fer./Dom.)
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '12px', marginTop: '32px' }}>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              style={{ flex: 2, padding: '14px', borderRadius: '12px', fontWeight: '700' }}
+            >
+              Salvar Lançamento
+            </button>
+            {currentOvertime && (
+              <button
+                type="button"
+                onClick={onDelete}
+                style={{
+                  flex: 1,
+                  padding: '14px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  background: '#fee2e2',
+                  color: '#dc2626',
+                  fontWeight: '700',
+                  cursor: 'pointer'
+                }}
+              >
+                Remover
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+function App() {
+  const [activeTab, setActiveTab] = useState<'board' | 'analytics'>('board');
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [resources, setResources] = useState<Resource[]>([]);
+  const [worksites, setWorksites] = useState<Worksite[]>([]);
+  const [allocations, setAllocations] = useState<AllocationData>({});
+  const [observations, setObservations] = useState<ObservationsData>({});
+  const [worksiteVisibility, setWorksiteVisibility] = useState<WorksiteVisibilityData>({});
+  const [allocationMetadata, setAllocationMetadata] = useState<AllocationMetadata>({});
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showWorksiteSettings, setShowWorksiteSettings] = useState(false);
+  const [showResourceSettings, setShowResourceSettings] = useState(false);
+  const [selectedResourceId, setSelectedResourceId] = useState<string | null>(null);
+  const [clipboard, setClipboard] = useState<{
+    allocations: { [resourceId: string]: string };
+    observations: { [workSiteId: string]: string };
+    visibility: { [workSiteId: string]: boolean };
+    links: { [machineId: string]: string };
+    overtime: { [resourceId: string]: OvertimeEntry };
+    partialAllocations: { [resourceId: string]: any[] };
+  } | null>(null);
+  const [overtime, setOvertime] = useState<OvertimeData>({});
+  const [showOvertimeModal, setShowOvertimeModal] = useState(false);
+  const [overtimeResourceId, setOvertimeResourceId] = useState<string | null>(null);
+  const [resourceLinks, setResourceLinks] = useState<ResourceLinks>({});
+  const [maintenanceHistory, setMaintenanceHistory] = useState<MaintenanceData>({});
+  const [partialAllocations, setPartialAllocations] = useState<PartialAllocationsData>({});
+  const [showHourSplitModal, setShowHourSplitModal] = useState(false);
+  const [hourSplitResourceId, setHourSplitResourceId] = useState<string | null>(null);
+
+  const boardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      const savedResources = localStorage.getItem('colline_resources');
+      const savedWorksites = localStorage.getItem('colline_worksites');
+      const savedAllocations = localStorage.getItem('colline_history');
+      const savedObservations = localStorage.getItem('colline_observations');
+      const savedWorksiteVisibility = localStorage.getItem('colline_worksite_visibility');
+      const savedMetadata = localStorage.getItem('colline_allocation_metadata');
+      const savedOvertime = localStorage.getItem('colline_overtime');
+      const savedLinks = localStorage.getItem('colline_resource_links');
+      const savedMaintenance = localStorage.getItem('colline_maintenance');
+      const savedPartialAllocations = localStorage.getItem('colline_partial_allocations');
+
+      if (savedResources) {
+        const parsed = JSON.parse(savedResources);
+        if (Array.isArray(parsed)) setResources(parsed);
+      }
+
+      if (savedWorksites) {
+        const parsed = JSON.parse(savedWorksites);
+        if (Array.isArray(parsed)) setWorksites(parsed);
+      } else {
+        setWorksites(DEFAULT_WORKSITES);
+      }
+
+      if (savedAllocations) {
+        const parsed = JSON.parse(savedAllocations);
+        if (parsed && typeof parsed === 'object') setAllocations(parsed);
+      }
+
+      if (savedObservations) {
+        const parsed = JSON.parse(savedObservations);
+        if (parsed && typeof parsed === 'object') setObservations(parsed);
+      }
+
+      if (savedWorksiteVisibility) {
+        const parsed = JSON.parse(savedWorksiteVisibility);
+        if (parsed && typeof parsed === 'object') setWorksiteVisibility(parsed);
+      }
+
+      if (savedMetadata) {
+        const parsed = JSON.parse(savedMetadata);
+        if (parsed && typeof parsed === 'object') setAllocationMetadata(parsed);
+      }
+
+      if (savedOvertime) {
+        const parsed = JSON.parse(savedOvertime);
+        if (parsed && typeof parsed === 'object') setOvertime(parsed);
+      }
+
+      if (savedLinks) {
+        const parsed = JSON.parse(savedLinks);
+        if (parsed && typeof parsed === 'object') setResourceLinks(parsed);
+      }
+      if (savedMaintenance) {
+        const parsed = JSON.parse(savedMaintenance);
+        if (parsed && typeof parsed === 'object') setMaintenanceHistory(parsed);
+      }
+      if (savedPartialAllocations) {
+        const parsed = JSON.parse(savedPartialAllocations);
+        if (parsed && typeof parsed === 'object') setPartialAllocations(parsed);
+      }
+    } catch (err) {
+      console.error("Erro ao carregar dados salvos:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('colline_resources', JSON.stringify(resources));
+    localStorage.setItem('colline_worksites', JSON.stringify(worksites));
+    localStorage.setItem('colline_history', JSON.stringify(allocations));
+    localStorage.setItem('colline_observations', JSON.stringify(observations));
+    localStorage.setItem('colline_worksite_visibility', JSON.stringify(worksiteVisibility));
+    localStorage.setItem('colline_allocation_metadata', JSON.stringify(allocationMetadata));
+    localStorage.setItem('colline_overtime', JSON.stringify(overtime));
+    localStorage.setItem('colline_resource_links', JSON.stringify(resourceLinks));
+    localStorage.setItem('colline_maintenance', JSON.stringify(maintenanceHistory));
+    localStorage.setItem('colline_partial_allocations', JSON.stringify(partialAllocations));
+  }, [resources, worksites, allocations, observations, worksiteVisibility, allocationMetadata, overtime, resourceLinks, maintenanceHistory, partialAllocations]);
+
+  const dateKey = format(currentDate, 'yyyy-MM-dd');
+  const currentAllocations = allocations[dateKey] || {};
+  const currentObservations = observations[dateKey] || {};
+  const currentMetadata = allocationMetadata[dateKey] || {};
+
+  const isWorksiteVisible = (siteId: string) => {
+    // 1. Verificar se há visibilidade explícita salva
+    const explicit = worksiteVisibility[dateKey]?.[siteId];
+    if (explicit !== undefined) return explicit;
+
+    // 2. Se não houver, verificar se há recursos alocados
+    const hasAllocations = resources.some(res => currentAllocations[res.id] === siteId);
+    return hasAllocations; // Se tem gente, abre. Se não tem, começa fechada.
+  };
+
+  const getResourceMaintenanceStatus = (resourceId: string, targetDateKey: string) => {
+    const dates = Object.keys(maintenanceHistory).filter(d => d <= targetDateKey).sort().reverse();
+    for (const d of dates) {
+      if (maintenanceHistory[d][resourceId] !== undefined) {
+        return maintenanceHistory[d][resourceId];
+      }
+    }
+    return false;
+  };
+
+  // -- Gestão de Obras --
+  const handleAddWorksite = (name: string) => {
+    const colorIndex = (worksites.length % 5) + 1;
+    const newWs: Worksite = {
+      id: `obra-${Date.now()}`,
+      name,
+      color: `obra-${colorIndex}`,
+      visible: true
+    };
+    setWorksites([...worksites, newWs]);
+  };
+
+  const handleDeleteWorksite = (id: string) => {
+    if (!confirm("Ao excluir esta obra, todas as alocações vinculadas serão removidas do histórico. Confirmar?")) return;
+    setWorksites(worksites.filter(w => w.id !== id));
+
+    const newAllocations = { ...allocations };
+    Object.keys(newAllocations).forEach(date => {
+      Object.keys(newAllocations[date]).forEach(resId => {
+        if (newAllocations[date][resId] === id) {
+          delete newAllocations[date][resId];
+        }
+      });
+    });
+    setAllocations(newAllocations);
+  };
+
+  const handleRenameWorksite = (id: string, newName: string) => {
+    setWorksites(worksites.map(w => w.id === id ? { ...w, name: newName } : w));
+  };
+
+  const handleToggleWorksiteVisibility = (id: string) => {
+    // Verificar se a obra tem recursos alocados antes de ocultar
+    const isCurrentlyVisible = worksiteVisibility[dateKey]?.[id] ?? false;
+
+    if (isCurrentlyVisible) {
+      // Tentando ocultar - verificar se tem recursos alocados
+      const allocatedResources = resources.filter(res => currentAllocations[res.id] === id);
+
+      if (allocatedResources.length > 0) {
+        const resourceNames = allocatedResources.map(r => r.name).join(', ');
+        alert(`\u26a0\ufe0f N\u00e3o \u00e9 poss\u00edvel ocultar esta obra!\n\nRecursos alocados: ${resourceNames}\n\nRemova todos os recursos desta obra antes de ocult\u00e1-la.`);
+        return;
+      }
+    }
+
+    setWorksiteVisibility(prev => ({
+      ...prev,
+      [dateKey]: {
+        ...(prev[dateKey] || {}),
+        [id]: !isCurrentlyVisible
+      }
+    }));
+  };
+
+  const handleToggleFinalAllocation = () => {
+    setAllocationMetadata(prev => ({
+      ...prev,
+      [dateKey]: {
+        ...(prev[dateKey] || {}),
+        isFinalAllocation: !prev[dateKey]?.isFinalAllocation
+      }
+    }));
+  };
+
+  const handleCopyBoard = () => {
+    setClipboard({
+      allocations: { ...(allocations[dateKey] || {}) },
+      observations: { ...(observations[dateKey] || {}) },
+      visibility: { ...(worksiteVisibility[dateKey] || {}) },
+      links: { ...(resourceLinks[dateKey] || {}) },
+      overtime: { ...(overtime[dateKey] || {}) },
+      partialAllocations: { ...(partialAllocations[dateKey] || {}) }
+    });
+    alert('📋 Quadro copiado! Vá para outro dia e clique em "Colar".');
+  };
+
+  const handlePasteBoard = () => {
+    if (!clipboard) {
+      alert('⚠️ Nenhum quadro copiado ainda!');
+      return;
+    }
+
+    const confirm = window.confirm(`📥 Colar quadro copiado nesta data?\n\nIsso substituirá as alocações e observações atuais.`);
+    if (!confirm) return;
+
+    // Ajuste para Sexta-feira (Máximo 8h)
+    let finalPartials = { ...clipboard.partialAllocations };
+    const maxHours = getMaxHoursForDate(currentDate);
+
+    if (maxHours < 9) { // É sexta ou fim de semana (mas assumindo sexta como alvo principal de ajuste)
+      const adjustedPartials: PartialAllocationsData[string] = {};
+
+      Object.keys(finalPartials).forEach(resId => {
+        const parts = [...finalPartials[resId]];
+        const totalHours = parts.reduce((acc, p) => acc + p.hours, 0);
+
+        if (totalHours > maxHours) {
+          // REDUZIR 1 HORA (Cenário: 9h -> 8h)
+          // Encontrar card com menor hora (que seja > 1 para não zerar) para reduzir
+          let targetIdx = -1;
+          let minHours = 999;
+
+          parts.forEach((p, idx) => {
+            if (p.hours > 0 && p.hours <= minHours) {
+              minHours = p.hours;
+              targetIdx = idx;
+            }
+          });
+
+          if (targetIdx !== -1) {
+            const diff = totalHours - maxHours;
+            if (parts[targetIdx].hours > diff) {
+              parts[targetIdx] = { ...parts[targetIdx], hours: parts[targetIdx].hours - diff };
+            }
+          }
+        }
+        adjustedPartials[resId] = parts;
+      });
+      finalPartials = adjustedPartials;
+    } else {
+      // É dia de semana (9h) - Verificar se veio de uma sexta (8h)
+      const adjustedPartials: PartialAllocationsData[string] = {};
+
+      Object.keys(finalPartials).forEach(resId => {
+        const parts = [...finalPartials[resId]];
+        const totalHours = parts.reduce((acc, p) => acc + p.hours, 0);
+
+        // Se o total for menor que o máximo (ex: veio 8h e o dia é 9h), adicionar a diferença
+        if (totalHours > 0 && totalHours < maxHours) {
+          // ADICIONAR 1 HORA (Cenário: 8h -> 9h)
+          // Adicionar ao card de MENOR hora para distribuir melhor
+          let targetIdx = -1;
+          let minHours = 999;
+
+          parts.forEach((p, idx) => {
+            if (p.hours > 0 && p.hours <= minHours) {
+              minHours = p.hours;
+              targetIdx = idx;
+            }
+          });
+
+          if (targetIdx !== -1) {
+            const diff = maxHours - totalHours;
+            parts[targetIdx] = { ...parts[targetIdx], hours: parts[targetIdx].hours + diff };
+          }
+        }
+        adjustedPartials[resId] = parts;
+      });
+      finalPartials = adjustedPartials;
+    }
+
+    setAllocations(prev => ({ ...prev, [dateKey]: { ...clipboard.allocations } }));
+    setObservations(prev => ({ ...prev, [dateKey]: { ...clipboard.observations } }));
+    setWorksiteVisibility(prev => ({ ...prev, [dateKey]: { ...clipboard.visibility } }));
+    setResourceLinks(prev => ({ ...prev, [dateKey]: { ...clipboard.links } }));
+    setOvertime(prev => ({ ...prev, [dateKey]: { ...clipboard.overtime } }));
+    setPartialAllocations(prev => ({ ...prev, [dateKey]: finalPartials }));
+
+    alert('✅ Quadro colado com sucesso!');
+  };
+
+  const handleToggleAllWorksites = (visible: boolean) => {
+    const updates: { [key: string]: boolean } = {};
+    worksites.forEach(ws => {
+      updates[ws.id] = visible;
+    });
+    setWorksiteVisibility(prev => ({
+      ...prev,
+      [dateKey]: updates
+    }));
+  };
+
+  // -- Gestão de Recursos --
+  const handleAddResource = (res: Resource) => setResources([...resources, res]);
+  const handleUpdateResource = (updatedRes: Resource) => {
+    setResources(resources.map(r => r.id === updatedRes.id ? updatedRes : r));
+  };
+  const handleDeleteResource = (id: string) => {
+    if (!confirm("Deseja realmente excluir este recurso?")) return;
+    setResources(resources.filter(r => r.id !== id));
+  };
+
+  const getMaxHoursForDate = (date: Date): number => {
+    const dayOfWeek = date.getDay(); // 0 = Domingo, 5 = Sexta
+    if (dayOfWeek === 0 || dayOfWeek === 6) return 0;
+    return dayOfWeek === 5 ? 8 : 9;
+  };
+
+  const handleHourSplit = (resourceId: string) => {
+    setHourSplitResourceId(resourceId);
+    setShowHourSplitModal(true);
+  };
+
+  const handleSaveHourSplit = (hours: number, options: { earlyDismissal?: boolean, maintenanceAfter?: boolean }) => {
+    if (!hourSplitResourceId) return;
+
+    const resource = resources.find(r => r.id === hourSplitResourceId);
+    if (!resource) return;
+
+    const currentSiteId = currentAllocations[hourSplitResourceId] || 'pateo';
+    const maxHours = getMaxHoursForDate(currentDate);
+    const remainingHours = maxHours - hours;
+
+    // Criar alocação parcial principal
+    const newPartials: import('./types').PartialAllocation[] = [
+      {
+        resourceId: hourSplitResourceId,
+        worksiteId: currentSiteId,
+        hours: hours,
+      }
+    ];
+
+    // Lidar com horas restantes
+    if (remainingHours > 0 && !options.earlyDismissal) {
+      newPartials.push({
+        resourceId: hourSplitResourceId,
+        worksiteId: 'pateo',
+        hours: remainingHours,
+        maintenanceAfter: options.maintenanceAfter
+      });
+
+      // Se for máquina e tiver manutenção, ativar status de manutenção
+      if (resource.type === 'machine' && options.maintenanceAfter) {
+        setMaintenanceHistory(prev => ({
+          ...prev,
+          [dateKey]: {
+            ...(prev[dateKey] || {}),
+            [hourSplitResourceId]: true
+          }
+        }));
+      }
+    }
+
+    setPartialAllocations(prev => ({
+      ...prev,
+      [dateKey]: {
+        ...(prev[dateKey] || {}),
+        [hourSplitResourceId]: newPartials
+      }
+    }));
+
+    setShowHourSplitModal(false);
+    setHourSplitResourceId(null);
+  };
+
+  const handleDeleteHourSplit = () => {
+    if (!hourSplitResourceId) return;
+
+    // Remover do estado de parciais
+    setPartialAllocations(prev => {
+      const newState = { ...prev };
+      if (newState[dateKey]) {
+        delete newState[dateKey][hourSplitResourceId];
+      }
+      return newState;
+    });
+
+    setShowHourSplitModal(false);
+    setHourSplitResourceId(null);
+  };
+
+  const handleToggleMaintenance = (resourceId: string) => {
+    const currentStatus = getResourceMaintenanceStatus(resourceId, dateKey);
+    const newStatus = !currentStatus;
+
+    setMaintenanceHistory(prev => ({
+      ...prev,
+      [dateKey]: {
+        ...(prev[dateKey] || {}),
+        [resourceId]: newStatus
+      }
+    }));
+
+    // Se estiver entrando em manutenção, mover para o pátio NO DIA ATUAL
+    if (newStatus) {
+      updateAllocation(resourceId, 'pateo');
+    }
+  };
+
+  // Helper para renderização
+  const getResourcesForSite = (siteId: string) => {
+    return resources.flatMap<{ resource: Resource; allocatedHours: number | undefined; key: string; dragId?: string; inMaintenance?: boolean }>(res => {
+      // 1. Verificar parciais
+      const partials = partialAllocations[dateKey]?.[res.id];
+      if (partials && partials.length > 0) {
+        return partials
+          .map((p, originalIndex) => ({ ...p, originalIndex })) // Preservar índice original
+          .filter(p => p.worksiteId === siteId)
+          .map((p) => ({
+            resource: res,
+            allocatedHours: p.hours,
+            key: `${res.id}-part-${p.originalIndex}`,
+            dragId: `partial:${res.id}:${p.originalIndex}`, // ID com índice correto
+            inMaintenance: !!p.maintenanceAfter
+          }));
+      }
+
+      // 2. Fallback para alocação padrão
+      const allocatedSite = currentAllocations[res.id] || 'pateo';
+      // Se siteId é pateo, e não tem alocação (allocatedSite é pateo), então deve aparecer
+      // Se siteId é obra-X, e allocatedSite é obra-X, deve aparecer
+      if (allocatedSite === siteId) {
+        return [{
+          resource: res,
+          allocatedHours: undefined, // Full day
+          key: res.id
+        }];
+      }
+
+      return [];
+    });
+  };
+
+  const handleBulkImport = (text: string) => {
+    const lines = text.split('\n');
+    let currentSection = '';
+    const newResources: Resource[] = [];
+    const newWorksites: Worksite[] = [];
+
+    lines.forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      if (trimmed === 'Funcionários') { currentSection = 'employees'; return; }
+      if (trimmed === 'Maquinas') { currentSection = 'machines'; return; }
+      if (trimmed === 'Obras') { currentSection = 'worksites'; return; }
+
+      try {
+        if (currentSection === 'employees') {
+          // Format: Name  Role  Value (R$ 416,10)
+          const parts = trimmed.split(/\t| {2,}/);
+          if (parts.length >= 2) {
+            const name = parts[0].trim();
+            const role = parts[1].trim();
+            const valueStr = parts[2] ? parts[2].replace('R$', '').replace('.', '').replace(',', '.').trim() : '0';
+            newResources.push({
+              id: `res-${Date.now()}-${Math.random()}`,
+              name,
+              type: 'employee',
+              role,
+              photo: `https://via.placeholder.com/150?text=${name.charAt(0)}`,
+              costPerDay: parseFloat(valueStr) || 0
+            });
+          }
+        } else if (currentSection === 'machines') {
+          // Format: Name  unit  value
+          const parts = trimmed.split(/\t| {2,}/);
+          if (parts.length >= 2) {
+            const name = parts[0].trim();
+            const unit = parts[1].trim();
+            const valueStr = parts[2] ? parts[2].replace('R$', '').replace('.', '').replace(',', '.').trim() : '0';
+            newResources.push({
+              id: `res-${Date.now()}-${Math.random()}`,
+              name,
+              type: 'machine',
+              role: unit === 'dia' ? 'Diário' : unit,
+              photo: `https://via.placeholder.com/150?text=🚜`,
+              costPerDay: parseFloat(valueStr) || 0
+            });
+          }
+        } else if (currentSection === 'worksites') {
+          if (trimmed !== 'Nome' && trimmed !== 'unidade' && trimmed !== 'valor' && trimmed !== 'Função' && trimmed !== 'Valor dia') {
+            newWorksites.push({
+              id: `obra-${Date.now()}-${Math.random()}`,
+              name: trimmed,
+              color: `obra-${(worksites.length + newWorksites.length % 5) + 1}`,
+              visible: true
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao processar linha:", trimmed);
+      }
+    });
+
+    if (newResources.length > 0 || newWorksites.length > 0) {
+      setResources(prev => [...prev, ...newResources]);
+      setWorksites(prev => [...prev, ...newWorksites]);
+      alert(`Importação concluída!\n${newResources.length} Recursos e ${newWorksites.length} Obras adicionados.`);
+    } else {
+      alert("Nenhum dado válido encontrado para importação.");
+    }
+  };
+
+  const updateAllocation = (resourceId: string, siteId: string) => {
+    setAllocations(prev => ({
+      ...prev,
+      [dateKey]: {
+        ...(prev[dateKey] || {}),
+        [resourceId]: siteId
+      }
+    }));
+    setSelectedResourceId(null); // Limpar seleção após alocar
+  };
+
+  const handleMonthChange = (newDate: Date) => {
+    setCurrentDate(newDate);
+  };
+
+  const handleCardClick = (resourceId: string) => {
+    const currentDayLinks = resourceLinks[dateKey] || {};
+
+    // Se já tinha algo selecionado e o novo clique é um recurso diferente
+    if (selectedResourceId && selectedResourceId !== resourceId) {
+      const res1 = resources.find(r => r.id === selectedResourceId);
+      const res2 = resources.find(r => r.id === resourceId);
+
+      // Se um é máquina e outro é funcionário
+      if (res1 && res2 && res1.type !== res2.type) {
+        const loc1 = currentAllocations[res1.id] || 'pateo';
+        const loc2 = currentAllocations[res2.id] || 'pateo';
+
+        if (loc1 === loc2) {
+          const machine = res1.type === 'machine' ? res1 : res2;
+          const employee = res1.type === 'employee' ? res1 : res2;
+
+          // Se já estava vinculado a este específico, remove
+          if (currentDayLinks[machine.id] === employee.id) {
+            setResourceLinks(prev => {
+              const newLinks = { ...prev };
+              const dayLinks = { ...newLinks[dateKey] };
+              delete dayLinks[machine.id];
+              newLinks[dateKey] = dayLinks;
+              return newLinks;
+            });
+          } else {
+            // Caso contrário, vincula
+            setResourceLinks(prev => ({
+              ...prev,
+              [dateKey]: {
+                ...(prev[dateKey] || {}),
+                [machine.id]: employee.id
+              }
+            }));
+          }
+
+          setSelectedResourceId(null);
+          return;
+        }
+      }
+    }
+
+    // Toggle: se já está selecionado, desseleciona
+    setSelectedResourceId(prev => prev === resourceId ? null : resourceId);
+  };
+
+  const onDragStart = (e: React.DragEvent, id: string) => {
+    console.log('Drag started with ID:', id);
+    e.dataTransfer.setData('text/plain', id);
+    e.dataTransfer.effectAllowed = 'move';
+    e.currentTarget.classList.add('dragging');
+  };
+
+  const onDragEnd = (e: React.DragEvent) => {
+    e.currentTarget.classList.remove('dragging');
+  };
+
+  const onDrop = (e: React.DragEvent, worksiteId: string) => {
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over');
+    const data = e.dataTransfer.getData('text/plain');
+    console.log('Dropped data:', data, 'on worksite:', worksiteId);
+
+    // Verificar se é uma alocação parcial (formato: partial:resourceId:index)
+    if (data.startsWith('partial:')) {
+      const parts = data.split(':');
+      if (parts.length === 3) {
+        const resourceId = parts[1];
+        const index = parseInt(parts[2]);
+
+        console.log('Processing partial drop for resource:', resourceId, 'index:', index);
+
+        setPartialAllocations(prev => {
+          const currentPartials = [...(prev[dateKey]?.[resourceId] || [])];
+          if (currentPartials[index]) {
+            // Atualizar o worksiteId da parcial específica
+            currentPartials[index] = {
+              ...currentPartials[index],
+              worksiteId: worksiteId
+            };
+
+            return {
+              ...prev,
+              [dateKey]: {
+                ...(prev[dateKey] || {}),
+                [resourceId]: currentPartials
+              }
+            };
+          }
+          return prev;
+        });
+        return;
+      }
+    }
+
+    // Comportamento normal para recursos inteiros
+    updateAllocation(data, worksiteId);
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    e.currentTarget.classList.add('drag-over');
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    e.currentTarget.classList.remove('drag-over');
+  };
+
+  const handleWorksiteClick = (siteId: string) => {
+    if (selectedResourceId) {
+      updateAllocation(selectedResourceId, siteId);
+    }
+  };
+
+  const updateObservation = (siteId: string, text: string) => {
+    setObservations(prev => ({
+      ...prev,
+      [dateKey]: {
+        ...(prev[dateKey] || {}),
+        [siteId]: text
+      }
+    }));
+  };
+
+  // -- Exportar Apenas Dados (JSON) --
+  const handleExportData = () => {
+    const fileNameBase = `Backup Quadro Alocação (${format(new Date(), 'dd-MM-yyyy')})`;
+    const masterData = {
+      resources,
+      worksites,
+      allocations,
+      observations,
+      worksiteVisibility,
+      allocationMetadata,
+      resourceLinks,
+      maintenanceHistory,
+      overtime,
+      partialAllocations,
+      exportDate: new Date().toISOString()
+    };
+    const jsonBlob = new Blob([JSON.stringify(masterData, null, 2)], { type: 'application/json' });
+    saveAs(jsonBlob, `${fileNameBase}.json`);
+    alert("Dados exportados com sucesso! (Arquivo JSON)");
+  };
+
+  // -- Exportar Apenas Imagem (PDF) --
+  const handleExportImage = async () => {
+    const fileNameBase = `Foto Quadro Alocação (${format(new Date(), 'dd-MM-yyyy')})`;
+
+    if (boardRef.current) {
+      // SALVAR ESTADO ORIGINAL
+      const originalStyles: Map<Element, string> = new Map();
+      const originalTextareas: { textarea: HTMLTextAreaElement, parent: HTMLElement, div: HTMLDivElement }[] = [];
+
+      try {
+        // 1. MODIFICAR DOM ORIGINAL ANTES DA CAPTURA
+        const board = boardRef.current;
+
+        // Limitar largura do board para evitar espaço vazio e DESATIVAR ANIMAÇÕES
+        originalStyles.set(board, board.getAttribute('style') || '');
+        board.style.setProperty('max-width', '1600px', 'important');
+        board.style.setProperty('animation', 'none', 'important');
+        board.style.setProperty('transition', 'none', 'important');
+        board.style.setProperty('opacity', '1', 'important');
+        board.style.setProperty('background', '#f1f5f9', 'important');
+
+        // Grid de obras
+        const grid = board.querySelector('.obras-grid') as HTMLElement;
+        if (grid) {
+          originalStyles.set(grid, grid.getAttribute('style') || '');
+          grid.style.setProperty('display', 'flex', 'important');
+          grid.style.setProperty('flex-wrap', 'wrap', 'important');
+          grid.style.setProperty('gap', '18px', 'important');
+          grid.style.setProperty('justify-content', 'space-between', 'important');
+          grid.style.setProperty('align-items', 'stretch', 'important');
+
+          // Obras individuais
+          const containers = grid.querySelectorAll('.obra-container');
+          containers.forEach((c) => {
+            const container = c as HTMLElement;
+            originalStyles.set(container, container.getAttribute('style') || '');
+            container.style.setProperty('flex', '1 1 calc(50% - 10px)', 'important');
+            container.style.setProperty('min-width', '580px', 'important');
+            container.style.setProperty('max-width', 'calc(50% - 10px)', 'important');
+            container.style.setProperty('opacity', '1', 'important');
+            container.style.setProperty('background', 'white', 'important');
+
+            // Conteúdo da obra
+            const content = container.querySelector('.obra-content') as HTMLElement;
+            if (content) {
+              originalStyles.set(content, content.getAttribute('style') || '');
+              content.style.setProperty('display', 'flex', 'important');
+              content.style.setProperty('flex-wrap', 'wrap', 'important');
+              content.style.setProperty('gap', '12px', 'important');
+              content.style.setProperty('justify-content', 'flex-start', 'important');
+              content.style.setProperty('align-content', 'flex-start', 'important');
+              content.style.setProperty('padding', '16px', 'important');
+              content.style.setProperty('background', '#fafafa', 'important');
+              content.style.setProperty('opacity', '1', 'important');
+            }
+          });
+        }
+
+        // 2. SUBSTITUIR TEXTAREAS POR DIVS
+        const notes = board.querySelectorAll('.obra-notes');
+        notes.forEach((note) => {
+          const textarea = note.querySelector('textarea');
+          if (textarea) {
+            const val = textarea.value;
+            const div = document.createElement('div');
+            div.className = 'pdf-comment-replacement';
+            div.style.setProperty('white-space', 'pre-wrap', 'important');
+            div.style.setProperty('word-wrap', 'break-word', 'important');
+            div.style.setProperty('padding', '10px', 'important');
+            div.style.setProperty('font-size', '13px', 'important');
+            div.style.setProperty('line-height', '1.5', 'important');
+            div.style.setProperty('border', '1px solid #e2e8f0', 'important');
+            div.style.setProperty('border-radius', '8px', 'important');
+            div.style.setProperty('min-height', '50px', 'important');
+            div.style.setProperty('background', 'white', 'important');
+            div.style.setProperty('color', '#1e293b', 'important');
+            div.style.setProperty('font-family', 'Inter, sans-serif', 'important');
+            div.style.setProperty('width', '100%', 'important');
+            div.textContent = val || 'Sem observações.';
+
+            originalStyles.set(textarea, textarea.getAttribute('style') || '');
+            textarea.style.setProperty('display', 'none', 'important');
+            note.insertBefore(div, note.firstChild);
+            originalTextareas.push({ textarea, parent: note as HTMLElement, div });
+          }
+        });
+
+        // 3. FORÇAR OPACIDADE NOS CARDS
+        const cards = board.querySelectorAll('.resource-card');
+        cards.forEach((card) => {
+          const c = card as HTMLElement;
+          originalStyles.set(c, c.getAttribute('style') || '');
+          c.style.setProperty('opacity', '1', 'important');
+          c.style.setProperty('background', 'white', 'important');
+          c.style.setProperty('filter', 'none', 'important');
+
+          // Foto
+          const photo = c.querySelector('.resource-card-photo') as HTMLElement;
+          if (photo) {
+            originalStyles.set(photo, photo.getAttribute('style') || '');
+            photo.style.setProperty('opacity', '1', 'important');
+            photo.style.setProperty('filter', 'none', 'important');
+            photo.style.setProperty('-webkit-filter', 'none', 'important');
+          }
+
+          // Textos
+          const name = c.querySelector('.resource-card-name') as HTMLElement;
+          if (name) {
+            originalStyles.set(name, name.getAttribute('style') || '');
+            name.style.setProperty('opacity', '1', 'important');
+            name.style.setProperty('color', '#0f172a', 'important');
+          }
+
+          const role = c.querySelector('.resource-card-role') as HTMLElement;
+          if (role) {
+            originalStyles.set(role, role.getAttribute('style') || '');
+            role.style.setProperty('opacity', '1', 'important');
+            role.style.setProperty('color', '#64748b', 'important');
+          }
+        });
+
+        // 3.5 LIMPEZA RECURSIVA DE FILTROS/OPACIDADE/ANIMAÇÃO
+        const allElements = board.querySelectorAll('*');
+        allElements.forEach((el) => {
+          const element = el as HTMLElement;
+
+          // SALVAR PRIMEIRO antes de modificar qualquer coisa
+          if (!originalStyles.has(element)) {
+            originalStyles.set(element, element.getAttribute('style') || '');
+          }
+
+          // Desativar animações e transições em tudo
+          element.style.setProperty('animation', 'none', 'important');
+          element.style.setProperty('transition', 'none', 'important');
+          element.style.setProperty('opacity', '1', 'important');
+          element.style.setProperty('filter', 'none', 'important');
+          element.style.setProperty('backdrop-filter', 'none', 'important');
+          element.style.setProperty('-webkit-backdrop-filter', 'none', 'important');
+          element.style.setProperty('-webkit-filter', 'none', 'important');
+        });
+
+        // 4. AGUARDAR RENDERIZAÇÃO (Aumentado para garantir carregamento de imagens)
+        await new Promise(resolve => setTimeout(resolve, 1200));
+
+        // 5. CAPTURAR (Escala 3 para máxima nitidez)
+        const canvas = await html2canvas(board, {
+          scale: 3,
+          useCORS: true,
+          logging: false,
+          backgroundColor: '#f1f5f9',
+          imageTimeout: 0
+        });
+
+        // 6. GERAR PDF
+        const imgData = canvas.toDataURL('image/png');
+        const pdfWidthMm = 450;
+        const pdfHeightMm = (canvas.height * pdfWidthMm) / canvas.width;
+
+        const pdf = new jsPDF({
+          orientation: 'l',
+          unit: 'mm',
+          format: [pdfWidthMm, pdfHeightMm + 20]
+        });
+
+        // Adicionar branding
+        const headerY = 10;
+        pdf.setFontSize(28);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text('COLLINE ENGENHARIA', 15, headerY);
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(59, 130, 246);
+        pdf.text('QUADRO DE ALOCAÇÃO DIGITAL', 15, headerY + 8);
+        pdf.setTextColor(0, 0, 0);
+        pdf.setFontSize(12);
+        pdf.text(`DATA: ${format(currentDate, "dd/MM/yyyy")}`, pdfWidthMm - 80, headerY);
+        pdf.setFontSize(8);
+        pdf.setTextColor(100, 116, 139);
+        pdf.text(`Relatório gerado em ${format(new Date(), "dd/MM/yyyy HH:mm")}`, pdfWidthMm - 80, headerY + 6);
+
+        // Adicionar imagem
+        pdf.addImage(imgData, 'PNG', 0, headerY + 15, pdfWidthMm, pdfHeightMm);
+        pdf.save(`${fileNameBase}.pdf`);
+        alert("PDF gerado com sucesso!");
+      } catch (err) {
+        console.error("Erro:", err);
+        alert("Erro ao gerar PDF");
+      } finally {
+        // 7. RESTAURAR ESTADO ORIGINAL
+        originalStyles.forEach((style, element) => {
+          if (style) {
+            (element as HTMLElement).setAttribute('style', style);
+          } else {
+            (element as HTMLElement).removeAttribute('style');
+          }
+        });
+
+        originalTextareas.forEach(({ div }) => {
+          div.remove();
+        });
+      }
+    }
+  };
+
+  const handleImportBackup = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target?.result as string);
+        if (data.resources && data.allocations && data.worksites) {
+          if (confirm("Isso restaurará TODAS as informações (obras, funcionários, histórico e VÍNCULOS). Continuar?")) {
+            setResources(data.resources);
+            setWorksites(data.worksites);
+            setAllocations(data.allocations);
+            setObservations(data.observations || {});
+            setWorksiteVisibility(data.worksiteVisibility || {});
+            setAllocationMetadata(data.allocationMetadata || {});
+            setResourceLinks(data.resourceLinks || {});
+            setMaintenanceHistory(data.maintenanceHistory || {});
+            setOvertime(data.overtime || {});
+            setPartialAllocations(data.partialAllocations || {});
+          }
+        } else {
+          alert("Arquivo inválido ou corrompido.");
+        }
+      } catch (err) {
+        alert("Erro ao ler o arquivo de backup.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', background: '#f1f5f9' }}>
+      {/* HEADER */}
+      <header style={{
+        background: 'white',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+        padding: '16px 24px',
+        position: 'sticky',
+        top: 0,
+        zIndex: 50,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '20px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '30px' }}>
+          <div>
+            <h1 style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginBottom: '2px', letterSpacing: '-0.5px' }}>
+              COLLINE ENGENHARIA
+            </h1>
+            <p style={{ fontSize: '12px', color: '#3b82f6', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '2px' }}>
+              Quadro de Alocação Digital
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px', background: '#f8fafc', padding: '6px', borderRadius: '16px', border: '1px solid #e2e8f0' }}>
+            <button
+              onClick={() => setActiveTab('board')}
+              style={{
+                padding: '10px 24px',
+                borderRadius: '12px',
+                border: 'none',
+                background: activeTab === 'board' ? '#3b82f6' : 'transparent',
+                color: activeTab === 'board' ? 'white' : '#64748b',
+                fontWeight: '700',
+                fontSize: '14px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: activeTab === 'board' ? '0 4px 10px rgba(59, 130, 246, 0.3)' : 'none',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+              }}
+            >
+              <LayoutDashboard size={18} /> Quadro
+            </button>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              style={{
+                padding: '10px 24px',
+                borderRadius: '12px',
+                border: 'none',
+                background: activeTab === 'analytics' ? '#3b82f6' : 'transparent',
+                color: activeTab === 'analytics' ? 'white' : '#64748b',
+                fontWeight: '700',
+                fontSize: '14px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: activeTab === 'analytics' ? '0 4px 10px rgba(59, 130, 246, 0.3)' : 'none',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+              }}
+            >
+              <PieChartIcon size={18} /> Painel Analítico
+            </button>
+          </div>
+        </div>
+
+        {activeTab === 'board' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#ffffff', padding: '8px 16px', borderRadius: '16px', boxShadow: '0 2px 6px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0' }}>
+            <button onClick={() => setCurrentDate(subDays(currentDate, 1))} className="btn" style={{ padding: '8px', background: '#f1f5f9', border: 'none', borderRadius: '10px', cursor: 'pointer' }}>
+              <ChevronLeft size={20} />
+            </button>
+            <div style={{ position: 'relative', minWidth: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <input
+                type="date"
+                value={format(currentDate, 'yyyy-MM-dd')}
+                onChange={(e) => setCurrentDate(parseISO(e.target.value))}
+                onClick={(e) => {
+                  try {
+                    (e.currentTarget as any).showPicker();
+                  } catch (err) {
+                    console.log("Picker not supported");
+                  }
+                }}
+                style={{
+                  position: 'absolute',
+                  opacity: 0,
+                  width: '100%',
+                  height: '100%',
+                  cursor: 'pointer',
+                  zIndex: 2
+                }}
+              />
+              <div style={{ padding: '0 20px', fontWeight: '800', fontSize: '16px', color: '#1e293b', textAlign: 'center', pointerEvents: 'none' }}>
+                <CalendarIcon size={18} style={{ display: 'inline', marginRight: '10px', color: '#3b82f6' }} />
+                {format(currentDate, "dd 'de' MMMM", { locale: ptBR })}
+              </div>
+            </div>
+            <button onClick={() => setCurrentDate(addDays(currentDate, 1))} className="btn" style={{ padding: '8px', background: '#f1f5f9', border: 'none', borderRadius: '10px', cursor: 'pointer' }}>
+              <ChevronRight size={20} />
+            </button>
+          </div>
+        )}
+
+        {/* CONTROLES DO QUADRO */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Status da Alocação */}
+          <button
+            onClick={handleToggleFinalAllocation}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 14px',
+              borderRadius: '12px',
+              border: '2px solid',
+              borderColor: currentMetadata.isFinalAllocation ? '#10b981' : '#f59e0b',
+              background: currentMetadata.isFinalAllocation ? '#ecfdf5' : '#fffbeb',
+              color: currentMetadata.isFinalAllocation ? '#065f46' : '#92400e',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: '700',
+              transition: 'all 0.2s'
+            }}
+          >
+            <div style={{
+              width: '18px',
+              height: '18px',
+              borderRadius: '5px',
+              background: currentMetadata.isFinalAllocation ? '#10b981' : '#f59e0b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              fontSize: '11px'
+            }}>
+              {currentMetadata.isFinalAllocation ? '✓' : '📋'}
+            </div>
+            <span>{currentMetadata.isFinalAllocation ? 'Alocação Final' : 'Em Planejamento'}</span>
+          </button>
+
+          {/* Copiar/Colar */}
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onClick={handleCopyBoard}
+              className="btn"
+              style={{
+                background: '#f1f5f9',
+                color: '#475569',
+                border: 'none',
+                fontSize: '13px',
+                padding: '8px 14px',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontWeight: '700',
+                cursor: 'pointer'
+              }}
+            >
+              📋 Copiar
+            </button>
+            <button
+              onClick={handlePasteBoard}
+              disabled={!clipboard}
+              style={{
+                background: clipboard ? '#3b82f6' : '#f1f5f9',
+                color: clipboard ? 'white' : '#94a3b8',
+                border: 'none',
+                fontSize: '13px',
+                padding: '8px 14px',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontWeight: '700',
+                cursor: clipboard ? 'pointer' : 'not-allowed',
+                opacity: clipboard ? 1 : 0.6
+              }}
+            >
+              📥 Colar
+            </button>
+          </div>
+
+          {/* Export/Import/Image */}
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onClick={handleExportData}
+              className="btn btn-primary"
+              style={{ fontSize: '13px', padding: '8px 14px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+              title="Baixar Backup de Dados (JSON)"
+            >
+              <FileJson size={16} /> Backup
+            </button>
+            <button
+              onClick={handleExportImage}
+              className="btn"
+              style={{
+                fontSize: '13px',
+                padding: '8px 14px',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: '#f59e0b',
+                color: 'white',
+                border: 'none',
+                fontWeight: '700',
+                cursor: 'pointer'
+              }}
+              title="Baixar Foto do Quadro (PDF)"
+            >
+              <Camera size={16} /> Imagem
+            </button>
+            <label className="btn btn-success" style={{ fontSize: '13px', padding: '8px 14px', borderRadius: '12px', cursor: 'pointer', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Upload size={16} /> Importar
+              <input
+                type="file"
+                className="hidden"
+                accept=".json"
+                onChange={(e) => e.target.files?.[0] && handleImportBackup(e.target.files[0])}
+              />
+            </label>
+          </div>
+        </div>
+      </header>
+
+      {/* CONTEÚDO */}
+      {activeTab === 'board' ? (
+        <main ref={boardRef} style={{ padding: '32px', maxWidth: '1600px', margin: '0 auto' }} className="animate-fade-in">
+          {/* OBRAS ATIVAS */}
+          <div className="obras-grid">
+            {worksites
+              .filter(ws => isWorksiteVisible(ws.id))
+              .map((site) => (
+                <div
+                  key={site.id}
+                  className={`obra-container ${site.color} drop-zone`}
+                  onDrop={(e) => onDrop(e, site.id)}
+                  onDragOver={onDragOver}
+                  onDragLeave={onDragLeave}
+                  onClick={() => handleWorksiteClick(site.id)}
+                  style={{ cursor: selectedResourceId ? 'pointer' : 'default' }}
+                >
+                  <div className="obra-header">
+                    <span>{site.name}</span>
+                    <span style={{ fontSize: '11px', opacity: 0.9 }}>
+                      {getResourcesForSite(site.id).length} alocados
+                    </span>
+                  </div>
+                  <div className="obra-content">
+                    {getResourcesForSite(site.id).map(item => (
+                      <ResourceCard
+                        key={item.key}
+                        resource={item.resource}
+                        allocatedHours={item.allocatedHours}
+                        dragId={item.dragId} // Passando ID especial
+                        onHourSplit={handleHourSplit}
+                        onDragStart={onDragStart}
+                        onDragEnd={onDragEnd}
+                        onClick={() => handleCardClick(item.resource.id)}
+                        isSelected={selectedResourceId === item.resource.id}
+                        onToggleMaintenance={handleToggleMaintenance}
+                        onOvertime={(id) => { setOvertimeResourceId(id); setShowOvertimeModal(true); }}
+                        hasOvertime={!!overtime[dateKey]?.[item.resource.id]}
+                        linkedResource={item.resource.type === 'machine' ? resources.find(r => r.id === (resourceLinks[dateKey]?.[item.resource.id])) : undefined}
+                        inMaintenance={item.inMaintenance !== undefined ? item.inMaintenance : getResourceMaintenanceStatus(item.resource.id, dateKey)}
+                      />
+                    ))}
+                  </div>
+                  <div className="obra-notes">
+                    <textarea
+                      placeholder="📝 Observações da obra..."
+                      rows={2}
+                      value={currentObservations[site.id] || ''}
+                      onChange={(e) => updateObservation(site.id, e.target.value)}
+                    />
+                  </div>
+                </div>
+              ))}
+            {worksites.filter(ws => isWorksiteVisible(ws.id)).length === 0 && (
+              <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '60px', background: 'white', borderRadius: '20px', border: '2px dashed #cbd5e1', color: '#64748b' }}>
+                Nenhuma obra visível no quadro hoje. Acesse as configurações para ativar obras.
+              </div>
+            )}
+          </div>
+
+          {/* PÁTIO */}
+          <div className="pateo-container drop-zone"
+            onDrop={(e) => onDrop(e, 'pateo')}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onClick={() => handleWorksiteClick('pateo')}
+            style={{ marginTop: '40px', cursor: selectedResourceId ? 'pointer' : 'default' }}
+          >
+            <div className="pateo-header">
+              <span>🅿️ PÁTIO DE RECURSOS (DISPONÍVEIS)</span>
+              <span style={{ fontSize: '13px', fontWeight: '700', opacity: 0.95, padding: '4px 12px', background: 'rgba(255,255,255,0.2)', borderRadius: '20px' }}>
+                {getResourcesForSite('pateo').length}
+              </span>
+            </div>
+            <div className="pateo-content">
+              {getResourcesForSite('pateo').map(item => (
+                <ResourceCard
+                  key={item.key}
+                  resource={item.resource}
+                  allocatedHours={item.allocatedHours}
+                  dragId={item.dragId} // Passando ID especial
+                  onHourSplit={handleHourSplit}
+                  onDragStart={onDragStart}
+                  onDragEnd={onDragEnd}
+                  onClick={() => handleCardClick(item.resource.id)}
+                  isSelected={selectedResourceId === item.resource.id}
+                  onToggleMaintenance={handleToggleMaintenance}
+                  onOvertime={(id) => { setOvertimeResourceId(id); setShowOvertimeModal(true); }}
+                  hasOvertime={!!overtime[dateKey]?.[item.resource.id]}
+                  linkedResource={item.resource.type === 'machine' ? resources.find(r => r.id === (resourceLinks[dateKey]?.[item.resource.id])) : undefined}
+                  inMaintenance={item.inMaintenance !== undefined ? item.inMaintenance : getResourceMaintenanceStatus(item.resource.id, dateKey)}
+                />
+              ))}
+            </div>
+          </div>
+        </main>
+      ) : (
+        <AnalyticalDashboard
+          resources={resources}
+          allocations={allocations}
+          overtime={overtime}
+          maintenanceHistory={maintenanceHistory}
+          partialAllocations={partialAllocations}
+          worksites={worksites}
+          selectedMonth={currentDate}
+          onMonthChange={handleMonthChange}
+        />
+      )}
+
+      {/* MENU DE GESTÃO CONSOLIDADO */}
+      <div style={{ position: 'fixed', bottom: '32px', left: '32px', zIndex: 100 }}>
+        {isMenuOpen && (
+          <div className="menu-gestao animate-fade-in" style={{
+            background: 'white',
+            borderRadius: '20px',
+            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
+            marginBottom: '16px',
+            padding: '12px',
+            width: '240px',
+            border: '1px solid #e2e8f0'
+          }}>
+            <button
+              onClick={() => { setShowResourceSettings(true); setIsMenuOpen(false); }}
+              className="menu-item"
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                textAlign: 'left',
+                color: '#1e293b',
+                fontWeight: '700',
+                fontSize: '14px',
+                transition: 'background 0.2s'
+              }}
+            >
+              <div style={{ background: '#dbeafe', color: '#1d4ed8', padding: '8px', borderRadius: '10px', display: 'flex' }}><Users size={18} /></div>
+              Gerenciar Recursos
+            </button>
+            <button
+              onClick={() => { setShowWorksiteSettings(true); setIsMenuOpen(false); }}
+              className="menu-item"
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                textAlign: 'left',
+                color: '#1e293b',
+                fontWeight: '700',
+                fontSize: '14px',
+                transition: 'background 0.2s',
+                marginTop: '4px'
+              }}
+            >
+              <div style={{ background: '#fef3c7', color: '#b45309', padding: '8px', borderRadius: '10px', display: 'flex' }}><Building2 size={18} /></div>
+              Gerenciar Obras
+            </button>
+          </div>
+        )}
+        <button
+          onClick={() => setIsMenuOpen(!isMenuOpen)}
+          className={`fixed-btn-gestao ${isMenuOpen ? 'active' : ''}`}
+          style={{
+            background: '#0f172a',
+            color: 'white',
+            width: '64px',
+            height: '64px',
+            borderRadius: '22px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: 'none',
+            cursor: 'pointer',
+            boxShadow: '0 8px 20px rgba(15, 23, 42, 0.3)',
+            transition: 'all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+          }}
+        >
+          {isMenuOpen ? <X size={28} /> : <Settings size={28} />}
+        </button>
+      </div>
+
+      {/* COMPONENTES DE CONFIGURAÇÃO */}
+      {showWorksiteSettings && (
+        <WorksiteSettings
+          worksites={worksites}
+          onAdd={handleAddWorksite}
+          onDelete={handleDeleteWorksite}
+          onRename={handleRenameWorksite}
+          onToggleVisibility={handleToggleWorksiteVisibility}
+          onToggleAllVisibility={handleToggleAllWorksites}
+          currentDate={currentDate}
+          worksiteVisibility={worksiteVisibility[dateKey] || {}}
+          allocationsForDate={currentAllocations}
+          resources={resources}
+          onClose={() => setShowWorksiteSettings(false)}
+        />
+      )}
+
+      {showResourceSettings && (
+        <ResourceSettings
+          resources={resources}
+          onAdd={handleAddResource}
+          onUpdate={handleUpdateResource}
+          onDelete={handleDeleteResource}
+          onBulkImport={handleBulkImport}
+          onClose={() => setShowResourceSettings(false)}
+        />
+      )}
+
+      {showOvertimeModal && overtimeResourceId && (
+        <OvertimeModal
+          resource={resources.find(r => r.id === overtimeResourceId)!}
+          currentOvertime={overtime[dateKey]?.[overtimeResourceId]}
+          onSave={(entry) => {
+            setOvertime(prev => ({
+              ...prev,
+              [dateKey]: {
+                ...(prev[dateKey] || {}),
+                [overtimeResourceId]: entry
+              }
+            }));
+            setShowOvertimeModal(false);
+          }}
+          onDelete={() => {
+            setOvertime(prev => {
+              const newOvertime = { ...prev };
+              if (newOvertime[dateKey]) {
+                delete newOvertime[dateKey][overtimeResourceId];
+              }
+              return newOvertime;
+            });
+            setShowOvertimeModal(false);
+          }}
+          onClose={() => setShowOvertimeModal(false)}
+        />
+      )}
+
+      {showHourSplitModal && hourSplitResourceId && (
+        <HourSplitModal
+          resource={resources.find(r => r.id === hourSplitResourceId)!}
+          currentDate={currentDate}
+          currentHours={partialAllocations[dateKey]?.[hourSplitResourceId]?.[0]?.hours}
+          onSave={handleSaveHourSplit}
+          onDelete={handleDeleteHourSplit}
+          onClose={() => setShowHourSplitModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+
+
+export default App;
