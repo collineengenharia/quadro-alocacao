@@ -8,7 +8,8 @@ import {
     Tractor,
     ChevronLeft,
     ChevronRight,
-    ArrowUpRight
+    ArrowUpRight,
+    CheckCircle2
 } from 'lucide-react';
 import { startOfMonth, endOfMonth, eachDayOfInterval, format, isSameDay, addMonths, addDays, subDays, isWeekend, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -62,14 +63,16 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
         const days = eachDayOfInterval({ start, end });
 
         let totalCost = 0;
+        let totalRealCost = 0;
+        let totalEstimatedCost = 0;
         let totalFuelCost = 0;
         let totalRainCost = 0;
-        let totalYardCost = 0; // Custo Pátio
+        let totalYardCost = 0;
 
         const worksiteCosts: { [key: string]: number } = { 'pateo': 0 };
         const dailyCosts: { date: string; custo: number }[] = [];
         const worksiteDailyData: { date: string;[worksiteName: string]: any }[] = [];
-        const monthlyData: { name: string; total: number }[] = []; // Placeholder
+        const monthlyData: { name: string; total: number }[] = [];
 
         // 1. Custos de Combustível
         days.forEach(day => {
@@ -87,24 +90,62 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
         });
 
         // 2. Determinar Estado Inicial de Manutenção e Loop Principal (Exclusividade)
-        // Precisamos manter um estado de "O recurso está em manutenção?" dia após dia.
         const sortedHistoryDates = Object.keys(maintenanceHistory).sort();
 
-        // Inicializar estado baseado no histórico ANTERIOR ao start
-        const initialMaintState: { [resId: string]: { inMaintenance: boolean, reason: string } } = {};
+        // Inicializar estado baseado no histórico ANTERIOR ao start (Lógica Independente)
+        const initialMaintState: { [resId: string]: { inMaintenance: boolean; reason: string } } = {};
 
         resources.forEach(res => {
-            const pastDates = sortedHistoryDates.filter(d => d < format(start, 'yyyy-MM-dd'));
-            if (pastDates.length > 0) {
-                // Pega a ultima entrada. Se foi manutenção, assume true até que se prove o contrário no futuro.
-                const lastDate = pastDates[pastDates.length - 1];
-                const entry = maintenanceHistory[lastDate]?.[res.id];
-                const inMaint = typeof entry === 'object' ? entry.inMaintenance : entry;
-                if (inMaint) {
-                    initialMaintState[res.id] = {
-                        inMaintenance: true,
+            // 1. Encontrar última entrada de manutenção ANTES do início do período
+            const pastDates = sortedHistoryDates.filter(d => d < format(start, 'yyyy-MM-dd')).reverse();
+            let lastMaintEntry: { inMaintenance: boolean; reason: string } | undefined;
+            let lastMaintDate: string | undefined;
+
+            for (const d of pastDates) {
+                const entry = maintenanceHistory[d]?.[res.id];
+                if (entry !== undefined) {
+                    lastMaintEntry = {
+                        inMaintenance: typeof entry === 'object' ? entry.inMaintenance : entry,
                         reason: (typeof entry === 'object' ? entry.reason : '') || 'Manutenção'
                     };
+                    lastMaintDate = d;
+                    break;
+                }
+            }
+
+            if (lastMaintEntry?.inMaintenance && lastMaintDate) {
+                // 2. Verificar se houve alocação que cancela a manutenção ENTRE a última data e o início do mês
+                const checkStart = lastMaintDate;
+                const checkEnd = format(start, 'yyyy-MM-dd');
+
+                const intermediateDates = Object.keys(allocations).filter(d => d > checkStart && d < checkEnd);
+                const intermediatePartials = Object.keys(partialAllocations).filter(d => d > checkStart && d < checkEnd);
+
+                let hasCancelingAlloc = false;
+
+                // Checa alocações completas
+                for (const d of intermediateDates) {
+                    const alloc = allocations[d]?.[res.id];
+                    if (alloc && alloc !== 'pateo' && alloc !== 'chuva') {
+                        hasCancelingAlloc = true;
+                        break;
+                    }
+                }
+
+                // Checa alocações parciais
+                if (!hasCancelingAlloc) {
+                    for (const d of intermediatePartials) {
+                        const parts = partialAllocations[d]?.[res.id] || [];
+                        if (parts.some(p => p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva')) {
+                            hasCancelingAlloc = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Só mantém em manutenção se NÃO houve alocação canceladora
+                if (!hasCancelingAlloc) {
+                    initialMaintState[res.id] = lastMaintEntry;
                 }
             }
         });
@@ -303,6 +344,11 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
             });
 
             totalCost += dailyTotal;
+            if (isFinal) {
+                totalRealCost += dailyTotal;
+            } else {
+                totalEstimatedCost += dailyTotal;
+            }
         });
 
         // 3. Ranking e Gráficos (Incluindo Pátio)
@@ -388,6 +434,8 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
         return {
             totalCost,
+            totalRealCost,
+            totalEstimatedCost,
             totalFuelCost,
             totalRainCost,
             pieData,
@@ -460,28 +508,50 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
             </div>
 
             {/* Grid de Cards Principais */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', marginBottom: '32px' }}>
-                {/* Custo Total */}
+            {/* Grid de Cards Principais */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px', marginBottom: '32px' }}>
+
+                {/* 1. Custo TOTAL (Soma Geral) */}
                 <div style={{ background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)', padding: '24px', borderRadius: '24px', color: 'white', boxShadow: '0 10px 30px rgba(0,0,0,0.15)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
                         <div style={{ background: 'rgba(255,255,255,0.1)', padding: '10px', borderRadius: '14px' }}><TrendingUp size={24} /></div>
                         <ArrowUpRight size={20} color="#4ade80" />
                     </div>
-                    <div style={{ fontSize: '13px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Custo Líquido Estimado</div>
+                    <div style={{ fontSize: '13px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Custo Líquido Total</div>
                     <div style={{ fontSize: '28px', fontWeight: '900', margin: '4px 0', letterSpacing: '-0.02em' }}>R$ {stats.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                    <div style={{ fontSize: '11px', color: '#4ade80', fontWeight: '700' }}>↑ 12% em relação ao mês anterior</div>
-                    <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(255,255,255,0.1)', fontSize: '11px', color: '#94a3b8' }}>
-                        Inclui diárias e extras.
-                    </div>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>Real + Estimado</div>
                 </div>
 
+                {/* 2. Custo REAL (Finalizado) */}
+                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
+                        <div style={{ background: '#dcfce7', padding: '10px', borderRadius: '14px' }}><CheckCircle2 size={24} color="#166534" /></div>
+                    </div>
+                    <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Líquido Real</div>
+                    <div style={{ fontSize: '26px', fontWeight: '900', margin: '4px 0', color: '#166534' }}>R$ {stats.totalRealCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: '11px', color: '#166534', fontWeight: '700' }}>Alocações Finalizadas</div>
+                </div>
+
+                {/* 3. Custo ESTIMADO (Planejamento) */}
+                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
+                        <div style={{ background: '#eff6ff', padding: '10px', borderRadius: '14px' }}><Calendar size={24} color="#3b82f6" /></div>
+                    </div>
+                    <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Líquido Estimado</div>
+                    <div style={{ fontSize: '26px', fontWeight: '900', margin: '4px 0', color: '#3b82f6' }}>R$ {stats.totalEstimatedCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: '700' }}>Alocações em Planejamento</div>
+                </div>
+            </div>
+
+            {/* Linha Secundária: Diesel e Chuva */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', marginBottom: '32px' }}>
                 {/* Custo Diesel */}
                 <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
                         <div style={{ background: '#ecfdf5', padding: '10px', borderRadius: '14px' }}><Droplet size={24} color="#10b981" /></div>
                     </div>
                     <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Consumo de Diesel</div>
-                    <div style={{ fontSize: '26px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalFuelCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: '24px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalFuelCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                     <div style={{ fontSize: '11px', color: '#10b981', fontWeight: '700' }}>Baseado na Cotação Diária</div>
                 </div>
 
@@ -491,7 +561,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         <div style={{ background: '#eff6ff', padding: '10px', borderRadius: '14px' }}><Droplet size={24} color="#3b82f6" /></div>
                     </div>
                     <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Improd. Climática (Chuvas)</div>
-                    <div style={{ fontSize: '26px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalRainCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: '24px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalRainCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                 </div>
             </div>
 
