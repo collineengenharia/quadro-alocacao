@@ -46,8 +46,8 @@ export const FuelManager: React.FC<FuelManagerProps> = ({
         const dates = Object.keys(maintenanceHistory).filter(d => d <= dateKey).sort().reverse();
         let inMaintenance = false;
         for (const d of dates) {
-            if (maintenanceHistory[d][machineId] !== undefined) {
-                inMaintenance = maintenanceHistory[d][machineId];
+            if (maintenanceHistory[d]?.[machineId] !== undefined) {
+                inMaintenance = !!maintenanceHistory[d]?.[machineId];
                 break;
             }
         }
@@ -204,11 +204,11 @@ export const FuelManager: React.FC<FuelManagerProps> = ({
                                 {hasData && (
                                     <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #f8fafc', display: 'flex', gap: '16px' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#3b82f6', fontWeight: '800' }}>
-                                            <Fuel size={14} /> {fuelData[dateKey][machine.id].fuelLiters}L
+                                            <Fuel size={14} /> {fuelData[dateKey]?.[machine.id]?.fuelLiters}L
                                         </div>
-                                        {fuelData[dateKey][machine.id].oilLiters > 0 && (
+                                        {(fuelData[dateKey]?.[machine.id]?.oilLiters || 0) > 0 && (
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#8b5cf6', fontWeight: '800' }}>
-                                                <Droplets size={14} /> {fuelData[dateKey][machine.id].oilLiters}L
+                                                <Droplets size={14} /> {fuelData[dateKey]?.[machine.id]?.oilLiters}L
                                             </div>
                                         )}
                                     </div>

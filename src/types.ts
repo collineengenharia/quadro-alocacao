@@ -15,6 +15,18 @@ export interface Worksite {
     color: string;
     visible?: boolean;
 }
+
+export interface AllocationData {
+    [dateKey: string]: { [resourceId: string]: string };
+}
+
+export interface AllocationMetadata {
+    [dateKey: string]: {
+        isFinalAllocation?: boolean;
+        observations?: string;
+    };
+}
+
 export interface OvertimeEntry {
     hours: number;
     multiplier: 1.5 | 2.0; // 1.5 para 50%, 2.0 para 100%
@@ -27,8 +39,17 @@ export interface ResourceLinks {
     [dateKey: string]: { [machineId: string]: string }; // machineId -> operatorId
 }
 
+export interface MaintenanceEntry {
+    inMaintenance: boolean;
+    reason?: string;
+}
+
 export interface MaintenanceData {
-    [dateKey: string]: { [resourceId: string]: boolean };
+    [dateKey: string]: { [resourceId: string]: MaintenanceEntry };
+}
+
+export interface FuelQuoteData {
+    [dateKey: string]: number;
 }
 
 export interface PartialAllocation {
