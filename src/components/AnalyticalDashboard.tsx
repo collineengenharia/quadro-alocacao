@@ -1,259 +1,412 @@
-import React, { useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
-    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
-    PieChart, Pie, Cell, LineChart, Line, Legend
-} from 'recharts';
-import {
-    TrendingUp, Users, Building2, AlertTriangle, Calendar,
-    ArrowUpRight, ArrowDownRight, Clock, Droplet, Tractor
+    TrendingUp,
+    AlertTriangle,
+    Calendar,
+    Building2,
+    Droplet,
+    Tractor,
+    ChevronLeft,
+    ChevronRight,
+    ArrowUpRight
 } from 'lucide-react';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval } from 'date-fns';
+import { startOfMonth, endOfMonth, eachDayOfInterval, format, isSameDay, addMonths, addDays, subDays, isWeekend, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import {
+    LineChart,
+    Line,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip as RechartsTooltip,
+    ResponsiveContainer,
+    PieChart,
+    Pie,
+    Cell,
+    Legend
+} from 'recharts';
+import type { Resource, Worksite, AllocationData, OvertimeData, MaintenanceData, PartialAllocationsData, FuelData, FuelQuoteData, AllocationMetadata } from '../types';
 
-import type { Resource, Worksite, OvertimeData, MaintenanceData, PartialAllocationsData, FuelData } from '../types';
-
-interface DashboardProps {
+interface AnalyticalDashboardProps {
     resources: Resource[];
-    allocations: { [date: string]: { [resourceId: string]: string } };
-    overtime?: OvertimeData;
-    maintenanceHistory?: MaintenanceData;
-    partialAllocations?: PartialAllocationsData;
-    fuelData?: FuelData;
+    allocations: AllocationData;
+    overtime: OvertimeData;
+    maintenanceHistory: MaintenanceData;
+    partialAllocations: PartialAllocationsData;
+    fuelData: FuelData;
+    fuelQuotes: FuelQuoteData;
     worksites: Worksite[];
     selectedMonth: Date;
     onMonthChange: (date: Date) => void;
+    allocationMetadata: AllocationMetadata;
 }
 
-const OBRA_COLORS: { [key: string]: string } = {
-    'obra-1': '#3b82f6',
-    'obra-2': '#10b981',
-    'obra-3': '#f59e0b',
-    'obra-4': '#ef4444',
-    'obra-5': '#8b5cf6',
-    'pateo': '#64748b'
-};
-
-function addMonths(date: Date, months: number): Date {
-    const d = new Date(date);
-    d.setMonth(d.getMonth() + months);
-    return d;
-}
-
-function ChevronLeft({ size, color }: { size: number, color?: string }) {
-    return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color || "currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m15 18-6-6 6-6" />
-        </svg>
-    );
-}
-
-function ChevronRight({ size, color }: { size: number, color?: string }) {
-    return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color || "currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m9 18 6-6-6-6" />
-        </svg>
-    );
-}
-
-export const AnalyticalDashboard: React.FC<DashboardProps> = ({
+export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
     resources,
     allocations,
-    overtime = {},
+    overtime,
+    maintenanceHistory,
+    partialAllocations,
+    fuelData,
+    fuelQuotes,
     worksites,
     selectedMonth,
     onMonthChange,
-    maintenanceHistory = {},
-    partialAllocations = {},
-    fuelData = {}
+    allocationMetadata
 }) => {
-    const FUEL_PRICE = 6.0; // R$/L
-
-    const getMaxHoursForDate = (date: Date): number => {
-        const dayOfWeek = date.getDay();
-        if (dayOfWeek === 0 || dayOfWeek === 6) return 0;
-        return dayOfWeek === 5 ? 8 : 9;
-    };
-
-    const getMaintStatus = (resId: string, dKey: string) => {
-        const dates = Object.keys(maintenanceHistory).filter(d => d <= dKey).sort().reverse();
-        for (const d of dates) {
-            if (maintenanceHistory[d]?.[resId] !== undefined) return maintenanceHistory[d][resId];
-        }
-        return false;
-    };
+    const [viewMode, setViewMode] = useState<'daily' | 'monthly'>('monthly');
 
     const stats = useMemo(() => {
+        const start = viewMode === 'monthly' ? startOfMonth(selectedMonth) : selectedMonth;
+        const end = viewMode === 'monthly' ? endOfMonth(selectedMonth) : selectedMonth;
+        const days = eachDayOfInterval({ start, end });
+
         let totalCost = 0;
         let totalFuelCost = 0;
-        const costBySite: { [key: string]: number } = {};
-        const dailyCosts: { [key: string]: number } = {};
-        const resourceUsage: { [key: string]: { obra: number, pateo: number } } = {};
         let totalRainCost = 0;
-        let totalIdleCost = 0;
+        let totalYardCost = 0; // Custo Pátio
 
-        const monthStart = startOfMonth(selectedMonth);
-        const monthEnd = endOfMonth(selectedMonth);
-        const days = eachDayOfInterval({ start: monthStart, end: monthEnd });
+        const worksiteCosts: { [key: string]: number } = { 'pateo': 0 };
+        const dailyCosts: { date: string; custo: number }[] = [];
+        const worksiteDailyData: { date: string;[worksiteName: string]: any }[] = [];
+        const monthlyData: { name: string; total: number }[] = []; // Placeholder
 
-        // Gráfico Anual
-        const monthlyData: { name: string, total: number }[] = [];
-        const year = selectedMonth.getFullYear();
+        // 1. Custos de Combustível
+        days.forEach(day => {
+            const dateKey = format(day, 'yyyy-MM-dd');
+            const dailyQuote = fuelQuotes[dateKey] || 0;
+            const dailyFuelEntries = fuelData[dateKey] || {};
 
-        for (let m = 0; m < 12; m++) {
-            const mStart = new Date(year, m, 1);
-            const mEnd = endOfMonth(mStart);
-            const mDays = eachDayOfInterval({ start: mStart, end: mEnd });
-            let mTotal = 0;
+            let dailyFuelTotal = 0;
+            Object.values(dailyFuelEntries).forEach(entry => {
+                if (entry && entry.fuelLiters) {
+                    dailyFuelTotal += entry.fuelLiters * dailyQuote;
+                }
+            });
+            totalFuelCost += dailyFuelTotal;
+        });
 
-            mDays.forEach(day => {
-                const dk = format(day, 'yyyy-MM-dd');
-                const dAlloc = allocations[dk] || {};
-                const maxHours = getMaxHoursForDate(day) || 8;
+        // 2. Determinar Estado Inicial de Manutenção e Loop Principal (Exclusividade)
+        // Precisamos manter um estado de "O recurso está em manutenção?" dia após dia.
+        const sortedHistoryDates = Object.keys(maintenanceHistory).sort();
 
-                resources.forEach(res => {
-                    const partials = partialAllocations[dk]?.[res.id];
-                    let dailyBaseCost = 0;
+        // Inicializar estado baseado no histórico ANTERIOR ao start
+        const initialMaintState: { [resId: string]: { inMaintenance: boolean, reason: string } } = {};
 
-                    const isInMaint = res.type === 'machine' && getMaintStatus(res.id, dk);
-                    const isF = res.ignoreCost || isInMaint;
+        resources.forEach(res => {
+            const pastDates = sortedHistoryDates.filter(d => d < format(start, 'yyyy-MM-dd'));
+            if (pastDates.length > 0) {
+                // Pega a ultima entrada. Se foi manutenção, assume true até que se prove o contrário no futuro.
+                const lastDate = pastDates[pastDates.length - 1];
+                const entry = maintenanceHistory[lastDate]?.[res.id];
+                const inMaint = typeof entry === 'object' ? entry.inMaintenance : entry;
+                if (inMaint) {
+                    initialMaintState[res.id] = {
+                        inMaintenance: true,
+                        reason: (typeof entry === 'object' ? entry.reason : '') || 'Manutenção'
+                    };
+                }
+            }
+        });
 
-                    if (!isF) {
-                        if (partials && partials.length > 0) {
-                            const costPerHour = (res.costPerDay || 0) / maxHours;
-                            partials.forEach(p => {
-                                if (p.worksiteId !== 'pateo') dailyBaseCost += costPerHour * p.hours;
-                            });
-                        } else {
-                            const sid = dAlloc[res.id] || 'pateo';
-                            if (sid !== 'pateo') dailyBaseCost = res.costPerDay || 0;
-                        }
+        const currentMaintState = { ...initialMaintState };
+        const maintenanceIntervalsMap: { [resId: string]: { start: Date, end: Date, days: number, reason: string }[] } = {};
+
+        // Para recursos que JÁ ESTAVAM em manutenção antes do período, cria intervalo inicial
+        Object.keys(initialMaintState).forEach(resId => {
+            if (initialMaintState[resId].inMaintenance) {
+                // Encontra quando a manutenção começou
+                const pastDates = sortedHistoryDates.filter(d => d < format(start, 'yyyy-MM-dd')).reverse();
+                let maintStartDate: Date | null = null;
+
+                for (const date of pastDates) {
+                    const entry = maintenanceHistory[date]?.[resId];
+                    const isInMaint = typeof entry === 'object' ? entry.inMaintenance : entry;
+
+                    if (isInMaint === true) {
+                        maintStartDate = parseISO(date);
+                    } else if (isInMaint === false) {
+                        break; // Parou de procurar se encontrou um false
                     }
+                }
 
-                    const o = overtime[dk]?.[res.id];
-                    const oC = o ? ((res.costPerDay || 0) / maxHours) * o.hours * o.multiplier : 0;
-                    const f = fuelData[dk]?.[res.id];
-                    const fC = f ? f.fuelLiters * FUEL_PRICE : 0;
-                    mTotal += (dailyBaseCost + oC + fC);
-                });
-            });
-
-            monthlyData.push({
-                name: format(mStart, 'MMM', { locale: ptBR }).toUpperCase(),
-                total: mTotal
-            });
-        }
+                // Cria intervalo do início da manutenção até o primeiro dia do período
+                if (maintStartDate) {
+                    maintenanceIntervalsMap[resId] = [{
+                        start: maintStartDate,
+                        end: subDays(start, 1), // Até ontem (antes do período começar)
+                        days: 0, // Não conta dias úteis de antes do período
+                        reason: initialMaintState[resId].reason
+                    }];
+                }
+            }
+        });
 
         days.forEach(day => {
             const dateKey = format(day, 'yyyy-MM-dd');
-            const dayAlloc = allocations[dateKey] || {};
-            dailyCosts[dateKey] = 0;
+            const isFinal = allocationMetadata[dateKey]?.isFinalAllocation;
+            let dailyTotal = 0;
 
-            resources.forEach(res => {
-                const maxHours = getMaxHoursForDate(day) || 8;
-                const partials = partialAllocations[dateKey]?.[res.id];
-                let dailyBaseCost = 0;
+            const dailyAllocations = allocations[dateKey] || {};
+            const dailyPartials = partialAllocations[dateKey] || {};
 
-                const isInMaint = res.type === 'machine' && getMaintStatus(res.id, dateKey);
-                const isFree = res.ignoreCost || isInMaint;
+            const dailyWorksiteCosts: { [key: string]: number } = {};
+            worksites.forEach(w => dailyWorksiteCosts[w.name] = 0);
+            dailyWorksiteCosts['Pátio'] = 0;
 
-                const fuelEntry = fuelData[dateKey]?.[res.id];
-                const dailyFuelCost = fuelEntry ? fuelEntry.fuelLiters * FUEL_PRICE : 0;
-                totalFuelCost += dailyFuelCost;
+            resources.forEach(resource => {
+                if (resource.ignoreCost) return;
 
-                if (!isFree) {
-                    if (partials && partials.length > 0) {
-                        const costPerHour = (res.costPerDay || 0) / maxHours;
-                        const totalHours = partials.reduce((acc, p) => acc + p.hours, 0);
+                // --- LÓGICA DE MANUTENÇÃO STICKY ---
+                const explicitAlloc = dailyAllocations[resource.id];
+                const explicitMaintEntry = maintenanceHistory[dateKey]?.[resource.id];
+                const explicitPartials = dailyPartials[resource.id] || [];
 
-                        partials.forEach(p => {
-                            if (p.worksiteId !== 'pateo') {
-                                const basePart = costPerHour * p.hours;
-                                const fuelPart = totalHours > 0 ? (p.hours / totalHours) * dailyFuelCost : 0;
-                                dailyBaseCost += basePart;
-                                costBySite[p.worksiteId] = (costBySite[p.worksiteId] || 0) + basePart + fuelPart;
-                            }
-                        });
+                // Determina se houve entrada explícita (True ou False)
+                let explicitInMaint: boolean | undefined = undefined;
+                if (explicitMaintEntry !== undefined) {
+                    explicitInMaint = typeof explicitMaintEntry === 'object' ? explicitMaintEntry.inMaintenance : explicitMaintEntry;
+                }
+
+                if (explicitInMaint === true) {
+                    currentMaintState[resource.id] = {
+                        inMaintenance: true,
+                        reason: (typeof explicitMaintEntry === 'object' ? explicitMaintEntry.reason : '') || 'Manutenção'
+                    };
+                } else if (explicitInMaint === false) {
+                    delete currentMaintState[resource.id];
+                } else {
+                    // Se não houve entrada manual HOJE, verifica se alocação REAL cancela o estado anterior
+                    const hasRealAlloc = (explicitAlloc && explicitAlloc !== 'pateo' && explicitAlloc !== 'chuva') ||
+                        explicitPartials.some(p => p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva');
+
+                    if (hasRealAlloc) {
+                        delete currentMaintState[resource.id];
+                    }
+                }
+
+                // Verifica se está efetivamente em manutenção HOJE
+                const inMaintenance = !!currentMaintState[resource.id]?.inMaintenance;
+
+                // Registro de Intervalos para Tabela
+                if (inMaintenance) {
+                    if (!maintenanceIntervalsMap[resource.id]) maintenanceIntervalsMap[resource.id] = [];
+                    const intervals = maintenanceIntervalsMap[resource.id];
+
+                    // Tenta estender o último intervalo se for consecutivo (ontem)
+                    const lastInterval = intervals[intervals.length - 1];
+                    const yesterday = subDays(day, 1);
+
+                    if (lastInterval && isSameDay(lastInterval.end, yesterday) && lastInterval.reason === currentMaintState[resource.id].reason) {
+                        lastInterval.end = day;
+                        if (isFinal) lastInterval.days++; // Conta dias úteis perdidos
                     } else {
-                        const sid = dayAlloc[res.id] || 'pateo';
-                        if (sid !== 'pateo') {
-                            dailyBaseCost = res.costPerDay || 0;
-                            costBySite[sid] = (costBySite[sid] || 0) + dailyBaseCost + dailyFuelCost;
+                        // Novo intervalo
+                        intervals.push({
+                            start: day,
+                            end: day,
+                            days: isFinal ? 1 : 0, // Primeiro dia
+                            reason: currentMaintState[resource.id].reason || 'Manutenção'
+                        });
+                    }
+
+                    return; // Pula custos se em manutenção
+                }
+
+                // --- LÓGICA DE CUSTOS (Se não está em manutenção) ---
+
+                const allocation = explicitAlloc;
+                const partials = explicitPartials;
+
+                let allocatedToSite = false;
+
+                // OCIOSIDADE (PÁTIO):
+                const isIdle = !isWeekend(day) && isFinal && (allocation === 'pateo' || !allocation) && partials.length === 0;
+
+                if (isIdle) {
+                    const idleCost = resource.costPerDay;
+                    totalYardCost += idleCost;
+                    worksiteCosts['pateo'] += idleCost;
+                    dailyWorksiteCosts['Pátio'] += idleCost;
+
+                    // Soma ao total da empresa
+                    dailyTotal += idleCost;
+                }
+
+                if (partials.length > 0) {
+                    partials.forEach(p => {
+                        if (p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva') {
+                            const hoursFraction = p.hours / 8;
+                            const cost = resource.costPerDay * hoursFraction;
+
+                            dailyTotal += cost;
+
+                            if (!worksiteCosts[p.worksiteId]) worksiteCosts[p.worksiteId] = 0;
+                            worksiteCosts[p.worksiteId] += cost;
+
+                            const wsName = worksites.find(w => w.id === p.worksiteId)?.name;
+                            if (wsName) dailyWorksiteCosts[wsName] = (dailyWorksiteCosts[wsName] || 0) + cost;
+
+                            allocatedToSite = true;
+                        } else if (p.worksiteId === 'chuva') {
+                            totalRainCost += resource.costPerDay * (p.hours / 8);
+                        }
+                    });
+                }
+
+                if (partials.length === 0 && allocation && allocation !== 'pateo' && allocation !== 'chuva') {
+                    dailyTotal += resource.costPerDay;
+
+                    if (!worksiteCosts[allocation]) worksiteCosts[allocation] = 0;
+                    worksiteCosts[allocation] += resource.costPerDay;
+
+                    const wsName = worksites.find(w => w.id === allocation)?.name;
+                    if (wsName) dailyWorksiteCosts[wsName] = (dailyWorksiteCosts[wsName] || 0) + resource.costPerDay;
+
+                    allocatedToSite = true;
+                }
+
+                if (partials.length === 0 && allocation === 'chuva') {
+                    totalRainCost += resource.costPerDay;
+                }
+
+                const ot = overtime[dateKey]?.[resource.id];
+                if (ot && allocatedToSite) {
+                    const hourlyRate = resource.costPerDay / 8;
+                    const otCost = ot.hours * hourlyRate * ot.multiplier;
+                    dailyTotal += otCost;
+
+                    if (allocation && allocation !== 'pateo' && allocation !== 'chuva') {
+                        worksiteCosts[allocation] += otCost;
+                        const wsName = worksites.find(w => w.id === allocation)?.name;
+                        if (wsName) dailyWorksiteCosts[wsName] += otCost;
+
+                    } else if (partials.length > 0) {
+                        const w = partials.find(p => p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva');
+                        if (w) {
+                            worksiteCosts[w.worksiteId] += otCost;
+                            const wsName = worksites.find(ws => ws.id === w.worksiteId)?.name;
+                            if (wsName) dailyWorksiteCosts[wsName] += otCost;
                         }
                     }
-                } else if (dailyFuelCost > 0) {
-                    const sid = (partials && partials.length > 0) ? partials[0].worksiteId : (dayAlloc[res.id] || 'pateo');
-                    costBySite[sid] = (costBySite[sid] || 0) + dailyFuelCost;
                 }
-
-                const ov = overtime[dateKey]?.[res.id];
-                const extraCost = ov ? ((res.costPerDay || 0) / maxHours) * ov.hours * ov.multiplier : 0;
-
-                const totalResCost = dailyBaseCost + extraCost + dailyFuelCost;
-                dailyCosts[dateKey] += totalResCost;
-                totalCost += totalResCost;
-
-                const sid = (partials && partials.length > 0) ? partials[0].worksiteId : (dayAlloc[res.id] || 'pateo');
-                const ws = worksites.find(w => w.id === sid);
-                const isRain = ws?.name.toUpperCase().includes('CHUVA');
-
-                if (isRain) {
-                    totalRainCost += totalResCost;
-                } else if (sid === 'pateo' && !isFree && !res.isAdministrative) {
-                    totalIdleCost += (res.costPerDay || 0);
-                }
-
-                const workedAny = dailyBaseCost > 0;
-                if (!resourceUsage[res.id]) resourceUsage[res.id] = { obra: 0, pateo: 0 };
-                if (workedAny) resourceUsage[res.id].obra++;
-                else if (!isInMaint && !res.isAdministrative) resourceUsage[res.id].pateo++;
             });
+
+            dailyCosts.push({
+                date: format(day, 'dd/MM'),
+                custo: dailyTotal
+            });
+
+            worksiteDailyData.push({
+                date: format(day, 'dd/MM'),
+                ...dailyWorksiteCosts
+            });
+
+            totalCost += dailyTotal;
         });
 
-        const pieData = worksites.map(ws => ({
-            name: ws.name,
-            value: costBySite[ws.id] || 0,
-            color: OBRA_COLORS[ws.color] || '#cbd5e1'
-        })).filter(d => d.value > 0);
+        // 3. Ranking e Gráficos (Incluindo Pátio)
+        const pieData = Object.entries(worksiteCosts).map(([id, value], index) => {
+            if (id === 'pateo') return { name: 'Pátio (Ociosidade)', value, color: '#94a3b8' };
+            const ws = worksites.find(w => w.id === id);
+            return {
+                name: ws ? ws.name : 'Desconhecido',
+                value,
+                color: ['#0ea5e9', '#22c55e', '#eab308', '#f97316', '#ef4444', '#8b5cf6'][index % 6]
+            };
+        }).filter(d => d.value > 0);
 
-        const lineData = days.slice(-14).map(day => ({
-            date: format(day, 'dd/MM'),
-            custo: dailyCosts[format(day, 'yyyy-MM-dd')] || 0
-        }));
+        const rankingData = pieData.sort((a, b) => b.value - a.value);
 
-        let totalDaysObra = 0;
-        let totalDaysPateo = 0;
-        resources.forEach(res => {
-            totalDaysObra += resourceUsage[res.id]?.obra || 0;
-            totalDaysPateo += resourceUsage[res.id]?.pateo || 0;
-        });
-        const productivityRate = totalDaysObra / (totalDaysObra + totalDaysPateo || 1);
+        // 4. Preparar Lista Final de Intervalos de Manutenção para Display
+        const maintenanceIntervals: { resourceId: string; start: string; end: string; days: number; reason: string; cost: number }[] = [];
 
-        const idleResources = resources
-            .filter(r => !r.isAdministrative)
-            .filter(r => {
-                const todayKey = format(selectedMonth, 'yyyy-MM-dd');
-                const isInMaint = r.type === 'machine' && getMaintStatus(r.id, todayKey);
-                return !isInMaint;
+        // Para cada recurso que teve manutenção, verifica se ainda está ativo no fim do período
+        Object.keys(maintenanceIntervalsMap).forEach(resId => {
+            maintenanceIntervalsMap[resId].forEach(interval => {
+                const res = resources.find(r => r.id === resId);
+
+                // Se o intervalo termina no último dia E o recurso ainda está em manutenção,
+                // expande até o fim do período visualizado
+                let finalEnd = interval.end;
+                const lastDay = days[days.length - 1];
+
+                if (isSameDay(interval.end, lastDay) && currentMaintState[resId]?.inMaintenance) {
+                    finalEnd = lastDay; // Garante que vai até o fim do mês visualizado
+                }
+
+                const cost = res ? interval.days * res.costPerDay : 0;
+                maintenanceIntervals.push({
+                    resourceId: resId,
+                    start: format(interval.start, 'yyyy-MM-dd'),
+                    end: format(finalEnd, 'yyyy-MM-dd'),
+                    days: interval.days,
+                    reason: interval.reason,
+                    cost: cost
+                });
             })
-            .map(res => ({
-                name: res.name,
-                days: resourceUsage[res.id]?.pateo || 0,
-                type: res.type
-            }))
-            .sort((a, b) => b.days - a.days)
-            .slice(0, 3)
-            .filter(r => r.days > 0);
+        });
 
-        const topSiteId = Object.entries(costBySite).sort((a, b) => b[1] - a[1])[0]?.[0];
-        const topSiteName = worksites.find(w => w.id === topSiteId)?.name || "N/A";
 
-        return { totalCost, totalFuelCost, pieData, lineData, productivityRate, idleResources, topSiteName, monthlyData, totalRainCost, totalIdleCost };
-    }, [resources, allocations, overtime, worksites, selectedMonth, partialAllocations, maintenanceHistory, fuelData]);
+        // 5. Ociosidade Detalhada (Lista Lateral) - SEM MANUTENÇÃO (Recalculado no loop principal mas precisa agregar aqui)
 
-    const getProductivityColor = (rate: number) => {
-        if (rate > 0.8) return '#16a34a';
-        if (rate > 0.5) return '#f59e0b';
-        return '#dc2626';
+        const idleResources: { name: string; type: string; days: number }[] = [];
+        const tempMaintState = { ...initialMaintState }; // CORRIGIDO: Usa initialMaintState que foi definido acima
+
+        resources.forEach(res => {
+            if (res.isAdministrative || res.ignoreCost) return;
+            let idleDays = 0;
+
+            // Re-simular a linha do tempo para este recurso
+            days.forEach(day => {
+                const dKey = format(day, 'yyyy-MM-dd');
+                const isFinal = allocationMetadata[dKey]?.isFinalAllocation;
+                const explicitAlloc = allocations[dKey]?.[res.id];
+                const explicitMaintEntry = maintenanceHistory[dKey]?.[res.id];
+                const explicitInMaint = explicitMaintEntry ? (typeof explicitMaintEntry === 'object' ? explicitMaintEntry.inMaintenance : explicitMaintEntry) : undefined;
+                const explicitPartials = partialAllocations[dKey]?.[res.id] || [];
+
+                if (explicitInMaint === true) {
+                    tempMaintState[res.id] = { inMaintenance: true, reason: '' };
+                } else if (explicitAlloc || explicitPartials.length > 0) {
+                    delete tempMaintState[res.id];
+                } else if (explicitInMaint === false) {
+                    delete tempMaintState[res.id];
+                }
+
+                const inMaint = !!tempMaintState[res.id]?.inMaintenance;
+
+                if (!inMaint && !isWeekend(day) && isFinal && (explicitAlloc === 'pateo' || !explicitAlloc) && explicitPartials.length === 0) {
+                    idleDays++;
+                }
+            });
+
+            if (idleDays > 0) {
+                idleResources.push({ name: res.name, type: res.type, days: idleDays });
+            }
+        });
+
+        return {
+            totalCost,
+            totalFuelCost,
+            totalRainCost,
+            pieData,
+            lineData: dailyCosts,
+            monthlyData,
+            rankingData,
+            worksiteDailyData,
+            idleResources: idleResources.sort((a, b) => b.days - a.days).slice(0, 20),
+            maintenanceIntervals: maintenanceIntervals.sort((a, b) => b.start.localeCompare(a.start))
+        };
+
+    }, [resources, allocations, overtime, maintenanceHistory, partialAllocations, fuelData, fuelQuotes, worksites, selectedMonth, viewMode, allocationMetadata]);
+
+    const handleNavigation = (direction: 'prev' | 'next') => {
+        if (viewMode === 'monthly') {
+            onMonthChange(direction === 'prev' ? startOfMonth(addMonths(selectedMonth, -1)) : startOfMonth(addMonths(selectedMonth, 1)));
+        } else {
+            onMonthChange(direction === 'prev' ? subDays(selectedMonth, 1) : addDays(selectedMonth, 1));
+        }
     };
 
     return (
@@ -262,20 +415,52 @@ export const AnalyticalDashboard: React.FC<DashboardProps> = ({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
                 <div>
                     <h2 style={{ fontSize: '24px', fontWeight: '900', color: '#0f172a', margin: 0 }}>Dashboard Analítico</h2>
-                    <p style={{ color: '#64748b', margin: '4px 0 0 0', fontWeight: '600' }}>Visão geral de custos e produtividade</p>
+                    <p style={{ color: '#64748b', margin: '4px 0 0 0', fontWeight: '600' }}>
+                        {viewMode === 'monthly' ? 'Visão Mensal Consolidada' : 'Visão Diária Detalhada'}
+                    </p>
                 </div>
-                <div style={{ display: 'flex', gap: '12px', background: 'white', padding: '6px', borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
-                    <button onClick={() => onMonthChange(startOfMonth(addMonths(selectedMonth, -1)))} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronLeft size={20} /></button>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 16px', fontWeight: '800', color: '#1e293b' }}>
-                        <Calendar size={18} color="#3b82f6" />
-                        {format(selectedMonth, 'MMMM yyyy', { locale: ptBR }).toUpperCase()}
+
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                    {/* Toggle Display Mode */}
+                    <div style={{ background: 'white', padding: '4px', borderRadius: '12px', display: 'flex', gap: '4px', border: '1px solid #e2e8f0' }}>
+                        <button
+                            onClick={() => setViewMode('monthly')}
+                            style={{
+                                padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                background: viewMode === 'monthly' ? '#e0f2fe' : 'transparent',
+                                color: viewMode === 'monthly' ? '#0284c7' : '#64748b'
+                            }}
+                        >
+                            Mensal
+                        </button>
+                        <button
+                            onClick={() => setViewMode('daily')}
+                            style={{
+                                padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                background: viewMode === 'daily' ? '#e0f2fe' : 'transparent',
+                                color: viewMode === 'daily' ? '#0284c7' : '#64748b'
+                            }}
+                        >
+                            Diário
+                        </button>
                     </div>
-                    <button onClick={() => onMonthChange(startOfMonth(addMonths(selectedMonth, 1)))} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronRight size={20} /></button>
+
+                    <div style={{ display: 'flex', gap: '12px', background: 'white', padding: '6px', borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                        <button onClick={() => handleNavigation('prev')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronLeft size={20} /></button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 16px', fontWeight: '800', color: '#1e293b' }}>
+                            <Calendar size={18} color="#3b82f6" />
+                            {viewMode === 'monthly'
+                                ? format(selectedMonth, 'MMMM yyyy', { locale: ptBR }).toUpperCase()
+                                : format(selectedMonth, "dd 'de' MMMM", { locale: ptBR }).toUpperCase()
+                            }
+                        </div>
+                        <button onClick={() => handleNavigation('next')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronRight size={20} /></button>
+                    </div>
                 </div>
             </div>
 
             {/* Grid de Cards Principais */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px', marginBottom: '32px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', marginBottom: '32px' }}>
                 {/* Custo Total */}
                 <div style={{ background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)', padding: '24px', borderRadius: '24px', color: 'white', boxShadow: '0 10px 30px rgba(0,0,0,0.15)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -286,7 +471,7 @@ export const AnalyticalDashboard: React.FC<DashboardProps> = ({
                     <div style={{ fontSize: '28px', fontWeight: '900', margin: '4px 0', letterSpacing: '-0.02em' }}>R$ {stats.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                     <div style={{ fontSize: '11px', color: '#4ade80', fontWeight: '700' }}>↑ 12% em relação ao mês anterior</div>
                     <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(255,255,255,0.1)', fontSize: '11px', color: '#94a3b8' }}>
-                        Inclui diárias, extras e diesel.
+                        Inclui diárias e extras.
                     </div>
                 </div>
 
@@ -297,221 +482,201 @@ export const AnalyticalDashboard: React.FC<DashboardProps> = ({
                     </div>
                     <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Consumo de Diesel</div>
                     <div style={{ fontSize: '26px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalFuelCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                    <div style={{ fontSize: '11px', color: '#10b981', fontWeight: '700' }}>Base: R$ 6,00/Litro</div>
+                    <div style={{ fontSize: '11px', color: '#10b981', fontWeight: '700' }}>Baseado na Cotação Diária</div>
                 </div>
 
-                {/* Taxa de Utilização */}
+                {/* Custo Chuva */}
                 <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-                        <div style={{ background: '#fef3c7', padding: '10px', borderRadius: '14px' }}><Clock size={24} color="#f59e0b" /></div>
-                        <div style={{ fontSize: '20px', fontWeight: '900', color: getProductivityColor(stats.productivityRate) }}>{(stats.productivityRate * 100).toFixed(0)}%</div>
+                        <div style={{ background: '#eff6ff', padding: '10px', borderRadius: '14px' }}><Droplet size={24} color="#3b82f6" /></div>
                     </div>
-                    <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Taxa de Utilização</div>
-                    <div style={{ height: '8px', background: '#f1f5f9', borderRadius: '4px', marginTop: '12px', overflow: 'hidden' }}>
-                        <div style={{ width: `${stats.productivityRate * 100}%`, height: '100%', background: getProductivityColor(stats.productivityRate), borderRadius: '4px', transition: 'width 1s ease-in-out' }} />
-                    </div>
-                    <div style={{ fontSize: '11px', color: '#64748b', marginTop: '8px' }}>Tempo em obra vs Tempo no pátio</div>
-                </div>
-
-                {/* Maior Investimento */}
-                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-                        <div style={{ background: '#f0f9ff', padding: '10px', borderRadius: '14px' }}><Building2 size={24} color="#3b82f6" /></div>
-                        <ArrowUpRight size={20} color="#3b82f6" />
-                    </div>
-                    <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Maior Investimento</div>
-                    <div style={{ fontSize: '18px', fontWeight: '900', margin: '4px 0', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{stats.topSiteName}</div>
-                    <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: '700' }}>Obra com maior consumo/dia</div>
+                    <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Improd. Climática (Chuvas)</div>
+                    <div style={{ fontSize: '26px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalRainCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                 </div>
             </div>
 
-            {/* Cards de Custo Chuva e Ociosidade (Novos) */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '32px' }}>
-                <div style={{ background: '#f0f9ff', padding: '20px', borderRadius: '20px', border: '1px solid #bae6fd', display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <div style={{ background: '#3b82f6', padding: '12px', borderRadius: '16px', color: 'white' }}><Droplet size={24} /></div>
-                    <div>
-                        <div style={{ fontSize: '11px', fontWeight: '800', color: '#0369a1', textTransform: 'uppercase' }}>Custo Improd. Climática (Chuvas)</div>
-                        <div style={{ fontSize: '22px', fontWeight: '900', color: '#0c4a6e' }}>R$ {stats.totalRainCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+            {/* Ranking e Gráfico Pizza */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px', marginBottom: '32px' }}>
+                {/* Ranking de Custos (com Pátio) */}
+                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+                        <div style={{ background: '#f0f9ff', padding: '8px', borderRadius: '10px', color: '#3b82f6' }}><Building2 size={20} /></div>
+                        <h3 style={{ fontSize: '16px', fontWeight: '900', color: '#1e293b', margin: 0 }}>Ranking de Custos</h3>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '300px', overflowY: 'auto' }}>
+                        {stats.rankingData.map((item, index) => (
+                            <div key={index} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: '10px', background: index === 0 ? '#f8fafc' : 'transparent', border: index === 0 ? '1px solid #e2e8f0' : 'none' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: index === 0 ? '#fbbf24' : index === 1 ? '#94a3b8' : index === 2 ? '#b45309' : '#e2e8f0', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: '800' }}>
+                                        {index + 1}
+                                    </div>
+                                    <span style={{ fontSize: '13px', fontWeight: '700', color: '#334155' }}>{item.name}</span>
+                                </div>
+                                <span style={{ fontSize: '13px', fontWeight: '800', color: '#0f172a' }}>
+                                    R$ {item.value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                            </div>
+                        ))}
+                        {stats.rankingData.length === 0 && (
+                            <div style={{ textAlign: 'center', padding: '20px', color: '#94a3b8', fontSize: '13px' }}>Nenhum custo registrado no período.</div>
+                        )}
                     </div>
                 </div>
 
-                <div style={{ background: '#fff1f2', padding: '20px', borderRadius: '20px', border: '1px solid #fecdd3', display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <div style={{ background: '#ef4444', padding: '12px', borderRadius: '16px', color: 'white' }}><Clock size={24} /></div>
-                    <div>
-                        <div style={{ fontSize: '11px', fontWeight: '800', color: '#9f1239', textTransform: 'uppercase' }}>Custo Ociosidade (Pátio)</div>
-                        <div style={{ fontSize: '22px', fontWeight: '900', color: '#881337' }}>R$ {stats.totalIdleCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Gráficos em Grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px', marginBottom: '32px' }}>
-                {/* Distribuição por Obra */}
-                <div style={{ background: 'white', padding: '28px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '400px' }}>
-                    <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '24px' }}>Distribuição de Custos por Obra</h3>
-                    <div style={{ height: '300px' }}>
+                {/* Gráfico Pizza */}
+                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <h3 style={{ fontSize: '16px', fontWeight: '900', color: '#1e293b', marginBottom: '16px' }}>Distribuição Percentual</h3>
+                    <div style={{ height: '220px' }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
-                                <Pie data={stats.pieData} innerRadius={80} outerRadius={110} paddingAngle={8} dataKey="value">
+                                <Pie data={stats.pieData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
                                     {stats.pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                                 </Pie>
                                 <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} />
-                                <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                                <Legend verticalAlign="middle" align="right" layout="vertical" iconType="circle" />
                             </PieChart>
                         </ResponsiveContainer>
                     </div>
                 </div>
+            </div>
 
-                {/* Evolução de Gastos */}
-                <div style={{ background: 'white', padding: '28px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '400px' }}>
-                    <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '24px' }}>Evolução Mensal (Últimos 14 dias)</h3>
+            {/* Novo Gráfico: Evolução por Obra (APENAS NO MODO MENSAL) */}
+            {viewMode === 'monthly' && (
+                <div style={{ background: 'white', padding: '28px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '400px', marginBottom: '32px' }}>
+                    <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '24px' }}>Evolução de Custos por Obra</h3>
                     <div style={{ height: '300px' }}>
                         <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={stats.lineData}>
+                            <LineChart data={stats.worksiteDailyData}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                 <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} dy={10} />
                                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
                                 <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} />
-                                <Line type="monotone" dataKey="custo" stroke="#3b82f6" strokeWidth={4} dot={{ r: 4, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} />
+                                <Legend />
+                                {worksites
+                                    .filter(w => stats.rankingData.some(r => r.name === w.name))
+                                    .map((w, idx) => (
+                                        <Line
+                                            key={w.id}
+                                            type="monotone"
+                                            dataKey={w.name}
+                                            stroke={['#0ea5e9', '#22c55e', '#eab308', '#f97316', '#ef4444', '#8b5cf6'][idx % 6]}
+                                            strokeWidth={3}
+                                            dot={false}
+                                        />
+                                    ))}
+                                {/* Linha do Pátio Opcional */}
+                                {stats.rankingData.some(r => r.name === 'Pátio (Ociosidade)') && (
+                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                                )}
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
                 </div>
+            )}
 
-                {/* Histórico Mensal do Ano */}
-                <div style={{ background: 'white', padding: '28px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '400px', gridColumn: '1 / -1' }}>
-                    <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '24px' }}>Histórico Financeiro Anual ({selectedMonth.getFullYear()})</h3>
-                    <div style={{ height: '300px' }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={stats.monthlyData}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
-                                <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                                <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} />
-                                <Bar dataKey="total" fill="#3b82f6" radius={[6, 6, 0, 0]} />
-                            </BarChart>
-                        </ResponsiveContainer>
+
+            {/* Alertas (Apenas Ociosidade, Manutenção removido) */}
+            <div style={{ marginTop: '32px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px' }}>
+                {/* Ociosidade */}
+                <div style={{ background: '#fff1f2', padding: '24px', borderRadius: '24px', border: '1px solid #fecdd3' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+                        <div style={{ background: '#fecdd3', padding: '8px', borderRadius: '10px', color: '#be123c' }}><AlertTriangle size={20} /></div>
+                        <h3 style={{ fontSize: '16px', fontWeight: '900', color: '#881337', margin: 0 }}>Recursos com Maior Ociosidade</h3>
                     </div>
-                </div>
-
-                {/* Alerta de Ociosidade */}
-                {stats.idleResources.length > 0 && (
-                    <div style={{
-                        background: 'linear-gradient(135deg, #ffeaa7 0%, #fdcb6e 100%)',
-                        borderRadius: '20px',
-                        padding: '28px',
-                        boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
-                        gridColumn: '1 / -1'
-                    }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-                            <AlertTriangle size={24} color="#d63031" />
-                            <h3 style={{ fontSize: '16px', fontWeight: '800', color: '#2d3436' }}>
-                                Recursos com Maior Ociosidade (Top 3)
-                            </h3>
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-                            {stats.idleResources.map((res, i) => (
-                                <div key={i} style={{
-                                    background: 'white',
-                                    borderRadius: '12px',
-                                    padding: '16px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    boxShadow: '0 4px 8px rgba(0,0,0,0.08)'
-                                }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <div style={{
-                                            width: '40px',
-                                            height: '40px',
-                                            borderRadius: '50%',
-                                            background: '#f1f5f9',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            fontSize: '20px'
-                                        }}>
-                                            {res.type === 'employee' ? '👤' : '🚜'}
-                                        </div>
-                                        <div>
-                                            <div style={{ fontWeight: '700', fontSize: '14px', color: '#0f172a' }}>{res.name}</div>
-                                            <div style={{ fontSize: '10px', color: '#64748b', textTransform: 'uppercase', fontWeight: '600' }}>
-                                                {res.type === 'employee' ? 'Funcionário' : 'Máquina'}
-                                            </div>
-                                        </div>
+                    <div style={{ marginBottom: '12px', fontSize: '11px', color: '#9f1239', opacity: 0.8 }}>
+                        * Contabiliza apenas dias úteis com status "Alocação Final". Recursos em manutenção não contam.
+                    </div>
+                    {stats.idleResources.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto' }}>
+                            {stats.idleResources.map((res, idx) => (
+                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(255,255,255,0.6)', borderRadius: '12px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <span style={{ fontSize: '14px', fontWeight: '700', color: '#9f1239' }}>{res.name}</span>
+                                        <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: res.type === 'machine' ? '#fcd34d' : '#bae6fd', color: res.type === 'machine' ? '#92400e' : '#0369a1', fontWeight: '800' }}>
+                                            {res.type === 'machine' ? 'MQ' : 'FUNC'}
+                                        </span>
                                     </div>
-                                    <div style={{ textAlign: 'right' }}>
-                                        <div style={{ fontSize: '20px', fontWeight: '900', color: '#dc2626' }}>{res.days}</div>
-                                        <div style={{ fontSize: '11px', color: '#64748b', fontWeight: '600' }}>DIAS</div>
-                                    </div>
+                                    <div style={{ fontSize: '13px', fontWeight: '800', color: '#be123c' }}>{res.days} dias parado</div>
                                 </div>
                             ))}
                         </div>
-                    </div>
-                )}
+                    ) : (
+                        <div style={{ textAlign: 'center', color: '#9f1239', padding: '20px', fontSize: '14px' }}>Sem alertas de ociosidade!</div>
+                    )}
+                </div>
+            </div>
 
-                {/* Histórico de Manutenção */}
-                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', gridColumn: '1 / -1' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-                        <div style={{ background: '#fff7ed', padding: '8px', borderRadius: '12px' }}>
-                            <Tractor size={20} color="#ea580c" />
-                        </div>
-                        <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#1e293b' }}>Histórico de Disponibilidade (Manutenção)</h3>
+            {/* Histórico de Manutenção Consolidado */}
+            <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', marginTop: '32px', gridColumn: '1 / -1' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+                    <div style={{ background: '#fff7ed', padding: '8px', borderRadius: '12px' }}>
+                        <Tractor size={20} color="#ea580c" />
                     </div>
+                    <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#1e293b' }}>Histórico de Manutenção e Indisponibilidade</h3>
+                </div>
 
-                    <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead>
-                                <tr style={{ borderBottom: '2px solid #f1f5f9' }}>
-                                    <th style={{ textAlign: 'left', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>DATA</th>
-                                    <th style={{ textAlign: 'left', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>MÁQUINA</th>
-                                    <th style={{ textAlign: 'center', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>STATUS</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {Object.entries(maintenanceHistory)
-                                    .sort((a, b) => b[0].localeCompare(a[0]))
-                                    .slice(0, 10)
-                                    .flatMap(([date, machines]) =>
-                                        Object.entries(machines).map(([resId, isInMaint]) => {
-                                            const res = resources.find(r => r.id === resId);
-                                            if (!res) return null;
-                                            return (
-                                                <tr key={`${date}-${resId}`} style={{ borderBottom: '1px solid #f8fafc' }}>
-                                                    <td style={{ padding: '12px', fontSize: '13px', fontWeight: 600, color: '#334155' }}>
-                                                        {format(new Date(date + 'T00:00:00'), 'dd/MM/yyyy')}
-                                                    </td>
-                                                    <td style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                        <img src={res.photo} alt={res.name} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} />
-                                                        <div style={{ fontSize: '13px', fontWeight: 700, color: '#1e293b' }}>{res.name}</div>
-                                                    </td>
-                                                    <td style={{ padding: '12px', textAlign: 'center' }}>
-                                                        <span style={{
-                                                            padding: '4px 10px',
-                                                            borderRadius: '8px',
-                                                            fontSize: '11px',
-                                                            fontWeight: 800,
-                                                            background: isInMaint ? '#fef2f2' : '#f0fdf4',
-                                                            color: isInMaint ? '#ef4444' : '#16a34a',
-                                                            border: `1px solid ${isInMaint ? '#fecaca' : '#bbf7d0'}`
-                                                        }}>
-                                                            {isInMaint ? 'EM MANUTENÇÃO' : 'DISPONÍVEL'}
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })
-                                    )}
-                                {Object.keys(maintenanceHistory).length === 0 && (
-                                    <tr>
-                                        <td colSpan={3} style={{ padding: '40px', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic', fontSize: '13px' }}>
-                                            Nenhum registro de manutenção encontrado.
+                <div style={{ overflowX: 'auto', maxHeight: viewMode === 'monthly' ? '800px' : '400px', overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                            <tr style={{ borderBottom: '2px solid #f1f5f9' }}>
+                                <th style={{ textAlign: 'left', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>MÁQUINA</th>
+                                <th style={{ textAlign: 'center', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>PERÍODO INDISPONÍVEL</th>
+                                <th style={{ textAlign: 'center', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>CUSTO INDISP.</th>
+                                <th style={{ textAlign: 'center', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>IMPACTO (DIAS ÚTEIS)</th>
+                                <th style={{ textAlign: 'left', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>MOTIVO REGISTRADO</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {stats.maintenanceIntervals.map((entry, idx) => {
+                                const res = resources.find(r => r.id === entry.resourceId);
+                                if (!res) return null;
+                                return (
+                                    <tr key={idx} style={{ borderBottom: '1px solid #f8fafc' }}>
+                                        <td style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            {res.photo ? (
+                                                <img src={res.photo} alt={res.name} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} />
+                                            ) : (
+                                                <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🚜</div>
+                                            )}
+                                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#1e293b' }}>{res.name}</div>
+                                        </td>
+                                        <td style={{ padding: '12px', textAlign: 'center', fontSize: '13px', color: '#64748b' }}>
+                                            {format(parseISO(entry.start), 'dd/MM')} até {format(parseISO(entry.end), 'dd/MM')}
+                                        </td>
+                                        <td style={{ padding: '12px', textAlign: 'center' }}>
+                                            <span style={{
+                                                background: '#fff7ed',
+                                                color: '#c2410c',
+                                                padding: '4px 10px',
+                                                borderRadius: '8px',
+                                                fontSize: '12px',
+                                                fontWeight: '800',
+                                                border: '1px solid #ffedd5'
+                                            }}>
+                                                R$ {entry.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '12px', textAlign: 'center' }}>
+                                            <span style={{ background: '#f1f5f9', color: '#64748b', padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '800' }}>
+                                                {entry.days} dias alocados
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '12px', fontSize: '13px', color: '#64748b', fontStyle: 'italic' }}>
+                                            {entry.reason}
                                         </td>
                                     </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
+                                );
+                            })}
+                            {stats.maintenanceIntervals.length === 0 && (
+                                <tr>
+                                    <td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic', fontSize: '13px' }}>
+                                        Nenhum registro de manutenção encontrado.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>

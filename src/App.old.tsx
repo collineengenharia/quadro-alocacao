@@ -13,8 +13,7 @@ import {
   Settings,
   Building2,
   Users,
-  X,
-  Fuel as FuelIcon
+  X
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { saveAs } from 'file-saver';
@@ -23,9 +22,8 @@ import { ResourceSettings } from './components/ResourceSettings';
 import { AnalyticalDashboard } from './components/AnalyticalDashboard';
 import { WorksiteSettings } from './components/WorksiteSettings';
 import { HourSplitModal } from './components/HourSplitModal';
-import { FuelManager } from './components/FuelManager';
 
-import type { Resource, Worksite, OvertimeData, OvertimeEntry, ResourceLinks, MaintenanceData, MaintenanceEntry, PartialAllocationsData, FuelData, FuelEntry, FuelQuoteData } from './types';
+import type { Resource, Worksite, OvertimeData, OvertimeEntry, ResourceLinks, MaintenanceData, PartialAllocationsData } from './types';
 
 interface AllocationData {
   [dateKey: string]: { [resourceId: string]: string };
@@ -385,7 +383,7 @@ const OvertimeModal = ({ resource, currentOvertime, onSave, onDelete, onClose }:
 };
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'board' | 'analytics' | 'fuel'>('board');
+  const [activeTab, setActiveTab] = useState<'board' | 'analytics'>('board');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [resources, setResources] = useState<Resource[]>([]);
   const [worksites, setWorksites] = useState<Worksite[]>([]);
@@ -414,9 +412,6 @@ function App() {
   const [showHourSplitModal, setShowHourSplitModal] = useState(false);
   const [hourSplitResourceId, setHourSplitResourceId] = useState<string | null>(null);
 
-  const [fuelData, setFuelData] = useState<FuelData>({});
-  const [fuelQuotes, setFuelQuotes] = useState<FuelQuoteData>({});
-
   const boardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -431,9 +426,6 @@ function App() {
       const savedLinks = localStorage.getItem('colline_resource_links');
       const savedMaintenance = localStorage.getItem('colline_maintenance');
       const savedPartialAllocations = localStorage.getItem('colline_partial_allocations');
-
-      const savedFuel = localStorage.getItem('colline_fuel_data');
-      const savedFuelQuotes = localStorage.getItem('colline_fuel_quotes');
 
       if (savedResources) {
         const parsed = JSON.parse(savedResources);
@@ -484,14 +476,6 @@ function App() {
         const parsed = JSON.parse(savedPartialAllocations);
         if (parsed && typeof parsed === 'object') setPartialAllocations(parsed);
       }
-      if (savedFuel) {
-        const parsed = JSON.parse(savedFuel);
-        if (parsed && typeof parsed === 'object') setFuelData(parsed);
-      }
-      if (savedFuelQuotes) {
-        const parsed = JSON.parse(savedFuelQuotes);
-        if (parsed && typeof parsed === 'object') setFuelQuotes(parsed);
-      }
     } catch (err) {
       console.error("Erro ao carregar dados salvos:", err);
     }
@@ -508,9 +492,7 @@ function App() {
     localStorage.setItem('colline_resource_links', JSON.stringify(resourceLinks));
     localStorage.setItem('colline_maintenance', JSON.stringify(maintenanceHistory));
     localStorage.setItem('colline_partial_allocations', JSON.stringify(partialAllocations));
-    localStorage.setItem('colline_fuel_data', JSON.stringify(fuelData));
-    localStorage.setItem('colline_fuel_quotes', JSON.stringify(fuelQuotes));
-  }, [resources, worksites, allocations, observations, worksiteVisibility, allocationMetadata, overtime, resourceLinks, maintenanceHistory, partialAllocations, fuelData, fuelQuotes]);
+  }, [resources, worksites, allocations, observations, worksiteVisibility, allocationMetadata, overtime, resourceLinks, maintenanceHistory, partialAllocations]);
 
   const dateKey = format(currentDate, 'yyyy-MM-dd');
   const currentAllocations = allocations[dateKey] || {};
@@ -527,43 +509,14 @@ function App() {
     return hasAllocations; // Se tem gente, abre. Se não tem, começa fechada.
   };
 
-  // LÓGICA STICKY: Manutenção persiste até alocação real ou desmarcação manual
-  const getResourceMaintenanceStatus = (resourceId: string, targetDateKey: string): MaintenanceEntry | boolean => {
-    let lastState: MaintenanceEntry | boolean = false;
-    let lastDate: string | null = null;
-
-    // 1. Acha a última ação manual de manutenção registrada até hoje
-    const maintDates = Object.keys(maintenanceHistory).filter(d => d <= targetDateKey).sort();
-    for (const date of maintDates) {
-      const entry = maintenanceHistory[date]?.[resourceId];
-      if (entry !== undefined) {
-        lastState = entry;
-        lastDate = date;
+  const getResourceMaintenanceStatus = (resourceId: string, targetDateKey: string) => {
+    const dates = Object.keys(maintenanceHistory).filter(d => d <= targetDateKey).sort().reverse();
+    for (const d of dates) {
+      if (maintenanceHistory[d][resourceId] !== undefined) {
+        return maintenanceHistory[d][resourceId];
       }
     }
-
-    const isInMaint = typeof lastState === 'object' ? lastState.inMaintenance : lastState;
-    if (!isInMaint || !lastDate) return false;
-
-    // 2. Verifica se houve alguma alocação para OBRA depois desse registro
-    const allocDates = Object.keys(allocations).filter(d => d > lastDate && d <= targetDateKey);
-    for (const d of allocDates) {
-      const loc = allocations[d]?.[resourceId];
-      if (loc && loc !== 'pateo' && loc !== 'chuva') return false;
-    }
-
-    const partialDates = Object.keys(partialAllocations).filter(d => d > lastDate && d <= targetDateKey);
-    for (const d of partialDates) {
-      const parts = partialAllocations[d]?.[resourceId] || [];
-      if (parts.some(p => p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva')) return false;
-    }
-
-    return lastState;
-  };
-
-  const isResourceInMaintenance = (resourceId: string, targetDateKey: string): boolean => {
-    const status = getResourceMaintenanceStatus(resourceId, targetDateKey);
-    return typeof status === 'object' ? status.inMaintenance : status;
+    return false;
   };
 
   // -- Gestão de Obras --
@@ -617,16 +570,6 @@ function App() {
       [dateKey]: {
         ...(prev[dateKey] || {}),
         [id]: !isCurrentlyVisible
-      }
-    }));
-  };
-
-  const handleUpdateFuel = (entry: FuelEntry) => {
-    setFuelData(prev => ({
-      ...prev,
-      [entry.date]: {
-        ...(prev[entry.date] || {}),
-        [entry.resourceId]: entry
       }
     }));
   };
@@ -804,7 +747,7 @@ function App() {
           ...prev,
           [dateKey]: {
             ...(prev[dateKey] || {}),
-            [hourSplitResourceId]: { inMaintenance: true, reason: 'Manutenção Pós-Turno' }
+            [hourSplitResourceId]: true
           }
         }));
       }
@@ -840,31 +783,20 @@ function App() {
 
   const handleToggleMaintenance = (resourceId: string) => {
     const currentStatus = getResourceMaintenanceStatus(resourceId, dateKey);
-    const currentlyInMaintenance = typeof currentStatus === 'object' ? currentStatus.inMaintenance : currentStatus;
-
-    let reason = '';
-
-    if (!currentlyInMaintenance) {
-      const input = window.prompt("Motivo da Manutenção (Opcional):");
-      if (input === null) return; // Cancelou
-      reason = input;
-    }
-
-    const newEntry: MaintenanceEntry = {
-      inMaintenance: !currentlyInMaintenance,
-      reason: !currentlyInMaintenance ? reason : undefined
-    };
+    const newStatus = !currentStatus;
 
     setMaintenanceHistory(prev => ({
       ...prev,
       [dateKey]: {
         ...(prev[dateKey] || {}),
-        [resourceId]: newEntry
+        [resourceId]: newStatus
       }
     }));
 
-    // Nota: Máquinas em manutenção não precisam estar "alocadas" ao pátio
-    // A visualização no pátio será automática via renderização condicional
+    // Se estiver entrando em manutenção, mover para o pátio NO DIA ATUAL
+    if (newStatus) {
+      updateAllocation(resourceId, 'pateo');
+    }
   };
 
   // Helper para renderização
@@ -1414,26 +1346,6 @@ function App() {
               <LayoutDashboard size={18} /> Quadro
             </button>
             <button
-              onClick={() => setActiveTab('fuel')}
-              style={{
-                padding: '10px 24px',
-                borderRadius: '12px',
-                border: 'none',
-                background: activeTab === 'fuel' ? '#3b82f6' : 'transparent',
-                color: activeTab === 'fuel' ? 'white' : '#64748b',
-                fontWeight: '700',
-                fontSize: '14px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                boxShadow: activeTab === 'fuel' ? '0 4px 10px rgba(59, 130, 246, 0.3)' : 'none',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
-              }}
-            >
-              <FuelIcon size={18} /> Combustível
-            </button>
-            <button
               onClick={() => setActiveTab('analytics')}
               style={{
                 padding: '10px 24px',
@@ -1456,7 +1368,7 @@ function App() {
           </div>
         </div>
 
-        {(activeTab === 'board' || activeTab === 'fuel') && (
+        {activeTab === 'board' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#ffffff', padding: '8px 16px', borderRadius: '16px', boxShadow: '0 2px 6px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0' }}>
             <button onClick={() => setCurrentDate(subDays(currentDate, 1))} className="btn" style={{ padding: '8px', background: '#f1f5f9', border: 'none', borderRadius: '10px', cursor: 'pointer' }}>
               <ChevronLeft size={20} />
@@ -1655,7 +1567,7 @@ function App() {
                         onOvertime={(id) => { setOvertimeResourceId(id); setShowOvertimeModal(true); }}
                         hasOvertime={!!overtime[dateKey]?.[item.resource.id]}
                         linkedResource={item.resource.type === 'machine' ? resources.find(r => r.id === (resourceLinks[dateKey]?.[item.resource.id])) : undefined}
-                        inMaintenance={item.inMaintenance !== undefined ? item.inMaintenance : isResourceInMaintenance(item.resource.id, dateKey)}
+                        inMaintenance={item.inMaintenance !== undefined ? item.inMaintenance : getResourceMaintenanceStatus(item.resource.id, dateKey)}
                       />
                     ))}
                   </div>
@@ -1706,25 +1618,12 @@ function App() {
                   onOvertime={(id) => { setOvertimeResourceId(id); setShowOvertimeModal(true); }}
                   hasOvertime={!!overtime[dateKey]?.[item.resource.id]}
                   linkedResource={item.resource.type === 'machine' ? resources.find(r => r.id === (resourceLinks[dateKey]?.[item.resource.id])) : undefined}
-                  inMaintenance={item.inMaintenance !== undefined ? item.inMaintenance : isResourceInMaintenance(item.resource.id, dateKey)}
+                  inMaintenance={item.inMaintenance !== undefined ? item.inMaintenance : getResourceMaintenanceStatus(item.resource.id, dateKey)}
                 />
               ))}
             </div>
           </div>
         </main>
-      ) : activeTab === 'fuel' ? (
-        <FuelManager
-          resources={resources}
-          fuelData={fuelData}
-          onUpdateFuel={handleUpdateFuel}
-          currentDate={currentDate}
-          allocations={allocations}
-          maintenanceHistory={maintenanceHistory}
-
-          worksites={worksites}
-          fuelQuotes={fuelQuotes}
-          onUpdateFuelQuote={(date, val) => setFuelQuotes(prev => ({ ...prev, [date]: val }))}
-        />
       ) : (
         <AnalyticalDashboard
           resources={resources}
@@ -1732,12 +1631,9 @@ function App() {
           overtime={overtime}
           maintenanceHistory={maintenanceHistory}
           partialAllocations={partialAllocations}
-          fuelData={fuelData}
           worksites={worksites}
           selectedMonth={currentDate}
           onMonthChange={handleMonthChange}
-          fuelQuotes={fuelQuotes}
-          allocationMetadata={allocationMetadata}
         />
       )}
 

@@ -2,20 +2,30 @@ import React, { useState } from 'react';
 import { Fuel, Droplets, Save, Search, Truck } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import type { Resource, FuelData, FuelEntry } from '../types';
+import type { Resource, FuelData, FuelEntry, MaintenanceData, Worksite } from '../types';
 
 interface FuelManagerProps {
     resources: Resource[];
     fuelData: FuelData;
     onUpdateFuel: (entry: FuelEntry) => void;
     currentDate: Date;
+    allocations: { [date: string]: { [resourceId: string]: string } };
+    maintenanceHistory: MaintenanceData;
+    worksites: Worksite[];
+    fuelQuotes: { [date: string]: number };
+    onUpdateFuelQuote: (date: string, value: number) => void;
 }
 
 export const FuelManager: React.FC<FuelManagerProps> = ({
     resources,
     fuelData,
     onUpdateFuel,
-    currentDate
+    currentDate,
+    allocations,
+    maintenanceHistory,
+    worksites,
+    fuelQuotes,
+    onUpdateFuelQuote
 }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null);
@@ -30,6 +40,26 @@ export const FuelManager: React.FC<FuelManagerProps> = ({
         m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         m.id.toLowerCase().includes(searchTerm.toLowerCase())
     );
+
+    const getMachineStatus = (machineId: string) => {
+        // 1. Verificar Manutenção
+        const dates = Object.keys(maintenanceHistory).filter(d => d <= dateKey).sort().reverse();
+        let inMaintenance = false;
+        for (const d of dates) {
+            if (maintenanceHistory[d][machineId] !== undefined) {
+                inMaintenance = maintenanceHistory[d][machineId];
+                break;
+            }
+        }
+        if (inMaintenance) return { label: 'MANUTENÇÃO', color: '#fb923c' };
+
+        // 2. Verificar Obra
+        const siteId = allocations[dateKey]?.[machineId] || 'pateo';
+        if (siteId === 'pateo') return { label: 'PÁTIO', color: '#64748b' };
+
+        const site = worksites.find(w => w.id === siteId);
+        return { label: site?.name.toUpperCase() || 'OBRA', color: '#3b82f6' };
+    };
 
     const handleSelectMachine = (machine: Resource) => {
         setSelectedMachineId(machine.id);
@@ -87,6 +117,29 @@ export const FuelManager: React.FC<FuelManagerProps> = ({
                         }}
                     />
                 </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'white', padding: '10px 16px', borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                    <span style={{ fontSize: '13px', fontWeight: '800', color: '#64748b' }}>💰 COTAÇÃO DIESEL:</span>
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                        <span style={{ position: 'absolute', left: '10px', fontSize: '14px', fontWeight: '800', color: '#10b981' }}>R$</span>
+                        <input
+                            type="number"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={fuelQuotes[dateKey] !== undefined ? fuelQuotes[dateKey] : ''}
+                            onChange={(e) => onUpdateFuelQuote(dateKey, parseFloat(e.target.value))}
+                            style={{
+                                padding: '8px 12px 8px 36px',
+                                borderRadius: '10px',
+                                border: '2px solid #e2e8f0',
+                                width: '100px',
+                                fontSize: '16px',
+                                fontWeight: '900',
+                                color: '#0f172a',
+                                outline: 'none'
+                            }}
+                        />
+                    </div>
+                </div>
             </header>
 
             <div style={{ display: 'grid', gridTemplateColumns: selectedMachineId ? '1fr 380px' : '1fr', gap: '32px', transition: 'all 0.3s ease-in-out' }}>
@@ -133,7 +186,20 @@ export const FuelManager: React.FC<FuelManagerProps> = ({
                                 <div style={{ fontWeight: '900', color: '#1e293b', fontSize: '16px', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                     {machine.name}
                                 </div>
-                                <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: '600' }}>{machine.id}</div>
+                                <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: '600', marginBottom: '12px' }}>{machine.id}</div>
+
+                                <div style={{
+                                    display: 'inline-block',
+                                    fontSize: '10px',
+                                    fontWeight: '900',
+                                    color: 'white',
+                                    background: getMachineStatus(machine.id).color,
+                                    padding: '2px 8px',
+                                    borderRadius: '6px',
+                                    letterSpacing: '0.5px'
+                                }}>
+                                    {getMachineStatus(machine.id).label}
+                                </div>
 
                                 {hasData && (
                                     <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #f8fafc', display: 'flex', gap: '16px' }}>
