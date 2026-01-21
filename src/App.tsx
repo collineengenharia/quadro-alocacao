@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { format, addDays, parseISO } from 'date-fns';
+import { format, addDays, subDays, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import {
   Calendar as CalendarIcon,
@@ -1317,15 +1317,24 @@ function App() {
         await new Promise(resolve => setTimeout(resolve, 800));
 
         // 5. CAPTURAR E SALVAR (JPEG)
+        // Pegar dimensões REAIS do elemento para não cortar nada
+        const width = board.offsetWidth;
+        const height = board.scrollHeight + 50; // Um pouco mais de folga
+
         const canvas = await html2canvas(board, {
           scale: 2, // Boa resolução mas arquivo menor que scale 3
           useCORS: true,
           logging: false,
           backgroundColor: '#f1f5f9',
           imageTimeout: 0,
+          width: width,
+          height: height,
+          windowWidth: width,
+          windowHeight: height,
+          x: 0,
+          y: 0,
           scrollX: 0,
-          scrollY: 0,
-          windowWidth: 1600 // Forçar largura da viewport de captura
+          scrollY: 0
         });
 
         canvas.toBlob((blob) => {
