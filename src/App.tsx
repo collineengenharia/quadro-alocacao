@@ -18,7 +18,6 @@ import {
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { saveAs } from 'file-saver';
-import { jsPDF } from 'jspdf';
 import { ResourceSettings } from './components/ResourceSettings';
 import { AnalyticalDashboard } from './components/AnalyticalDashboard';
 import { WorksiteSettings } from './components/WorksiteSettings';
@@ -1134,26 +1133,57 @@ function App() {
     alert("Dados exportados com sucesso! (Arquivo JSON)");
   };
 
-  // -- Exportar Apenas Imagem (PDF) --
+  // -- Exportar Apenas Imagem (JPEG) --
   const handleExportImage = async () => {
-    const fileNameBase = `Foto Quadro Alocação (${format(new Date(), 'dd-MM-yyyy')})`;
+    const fileNameBase = `Quadro Alocação (${format(currentDate, 'dd-MM-yyyy')})`;
 
     if (boardRef.current) {
       // SALVAR ESTADO ORIGINAL
       const originalStyles: Map<Element, string> = new Map();
       const originalTextareas: { textarea: HTMLTextAreaElement, parent: HTMLElement, div: HTMLDivElement }[] = [];
+      let headerElement: HTMLElement | null = null;
 
       try {
         // 1. MODIFICAR DOM ORIGINAL ANTES DA CAPTURA
         const board = boardRef.current;
 
+        // INJETAR CABEÇALHO TEMPORÁRIO
+        headerElement = document.createElement('div');
+        headerElement.style.cssText = `
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 20px 40px;
+          background: #f1f5f9;
+          border-bottom: 2px solid #e2e8f0;
+          margin-bottom: 20px;
+          font-family: 'Inter', sans-serif;
+        `;
+
+        headerElement.innerHTML = `
+          <div>
+            <h1 style="font-size: 28px; font-weight: 900; color: #0f172a; margin: 0; letter-spacing: -0.5px;">COLLINE ENGENHARIA</h1>
+            <p style="font-size: 14px; color: #3b82f6; font-weight: 800; text-transform: uppercase; letter-spacing: 2px; margin-top: 5px;">Quadro de Alocação Digital</p>
+          </div>
+          <div style="text-align: right;">
+            <p style="font-size: 18px; font-weight: 700; color: #1e293b; margin: 0;">DATA: ${format(currentDate, "dd/MM/yyyy")}</p>
+            <p style="font-size: 12px; color: #64748b; margin-top: 5px;">Gerado em ${format(new Date(), "dd/MM/yyyy HH:mm")}</p>
+          </div>
+        `;
+
+        // Inserir no topo do board
+        board.insertBefore(headerElement, board.firstChild);
+
         // Limitar largura do board para evitar espaço vazio e DESATIVAR ANIMAÇÕES
         originalStyles.set(board, board.getAttribute('style') || '');
         board.style.setProperty('max-width', '1600px', 'important');
+        board.style.setProperty('width', '1600px', 'important'); // Forçar largura fixa
         board.style.setProperty('animation', 'none', 'important');
         board.style.setProperty('transition', 'none', 'important');
         board.style.setProperty('opacity', '1', 'important');
         board.style.setProperty('background', '#f1f5f9', 'important');
+        // Adicionar padding extra no final para evitar corte do pátio
+        board.style.setProperty('padding-bottom', '100px', 'important');
 
         // Grid de obras
         const grid = board.querySelector('.obras-grid') as HTMLElement;
@@ -1175,6 +1205,9 @@ function App() {
             container.style.setProperty('max-width', 'calc(50% - 10px)', 'important');
             container.style.setProperty('opacity', '1', 'important');
             container.style.setProperty('background', 'white', 'important');
+            // Remover sombra para ficar mais clean na impressão
+            container.style.setProperty('box-shadow', 'none', 'important');
+            container.style.setProperty('border', '1px solid #cbd5e1', 'important');
 
             // Conteúdo da obra
             const content = container.querySelector('.obra-content') as HTMLElement;
@@ -1229,6 +1262,8 @@ function App() {
           c.style.setProperty('opacity', '1', 'important');
           c.style.setProperty('background', 'white', 'important');
           c.style.setProperty('filter', 'none', 'important');
+          c.style.setProperty('box-shadow', 'none', 'important');
+          c.style.setProperty('border', '1px solid #cbd5e1', 'important');
 
           // Foto
           const photo = c.querySelector('.resource-card-photo') as HTMLElement;
@@ -1260,6 +1295,9 @@ function App() {
         allElements.forEach((el) => {
           const element = el as HTMLElement;
 
+          // Ignorar o header que acabamos de injetar
+          if (headerElement && headerElement.contains(element)) return;
+
           // SALVAR PRIMEIRO antes de modificar qualquer coisa
           if (!originalStyles.has(element)) {
             originalStyles.set(element, element.getAttribute('style') || '');
@@ -1275,54 +1313,41 @@ function App() {
           element.style.setProperty('-webkit-filter', 'none', 'important');
         });
 
-        // 4. AGUARDAR RENDERIZAÇÃO (Aumentado para garantir carregamento de imagens)
-        await new Promise(resolve => setTimeout(resolve, 1200));
+        // 4. AGUARDAR RENDERIZAÇÃO
+        await new Promise(resolve => setTimeout(resolve, 800));
 
-        // 5. CAPTURAR (Escala 3 para máxima nitidez)
+        // 5. CAPTURAR E SALVAR (JPEG)
         const canvas = await html2canvas(board, {
-          scale: 3,
+          scale: 2, // Boa resolução mas arquivo menor que scale 3
           useCORS: true,
           logging: false,
           backgroundColor: '#f1f5f9',
-          imageTimeout: 0
+          imageTimeout: 0,
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: 1600 // Forçar largura da viewport de captura
         });
 
-        // 6. GERAR PDF
-        const imgData = canvas.toDataURL('image/png');
-        const pdfWidthMm = 450;
-        const pdfHeightMm = (canvas.height * pdfWidthMm) / canvas.width;
+        canvas.toBlob((blob) => {
+          if (blob) {
+            saveAs(blob, `${fileNameBase}.jpg`);
+            alert("Imagem JPEG salva com sucesso!");
+          } else {
+            throw new Error("Falha ao gerar Blob");
+          }
+        }, 'image/jpeg', 0.9); // Qualidade 90%
 
-        const pdf = new jsPDF({
-          orientation: 'l',
-          unit: 'mm',
-          format: [pdfWidthMm, pdfHeightMm + 20]
-        });
-
-        // Adicionar branding
-        const headerY = 10;
-        pdf.setFontSize(28);
-        pdf.setFont('helvetica', 'bold');
-        pdf.text('COLLINE ENGENHARIA', 15, headerY);
-        pdf.setFontSize(10);
-        pdf.setFont('helvetica', 'normal');
-        pdf.setTextColor(59, 130, 246);
-        pdf.text('QUADRO DE ALOCAÇÃO DIGITAL', 15, headerY + 8);
-        pdf.setTextColor(0, 0, 0);
-        pdf.setFontSize(12);
-        pdf.text(`DATA: ${format(currentDate, "dd/MM/yyyy")}`, pdfWidthMm - 80, headerY);
-        pdf.setFontSize(8);
-        pdf.setTextColor(100, 116, 139);
-        pdf.text(`Relatório gerado em ${format(new Date(), "dd/MM/yyyy HH:mm")}`, pdfWidthMm - 80, headerY + 6);
-
-        // Adicionar imagem
-        pdf.addImage(imgData, 'PNG', 0, headerY + 15, pdfWidthMm, pdfHeightMm);
-        pdf.save(`${fileNameBase}.pdf`);
-        alert("PDF gerado com sucesso!");
       } catch (err) {
         console.error("Erro:", err);
-        alert("Erro ao gerar PDF");
+        alert("Erro ao gerar imagem");
       } finally {
         // 7. RESTAURAR ESTADO ORIGINAL
+
+        // Remover header
+        if (headerElement) {
+          headerElement.remove();
+        }
+
         originalStyles.forEach((style, element) => {
           if (style) {
             (element as HTMLElement).setAttribute('style', style);
