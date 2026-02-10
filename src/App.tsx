@@ -1278,6 +1278,14 @@ function App() {
           }
         });
 
+        // 2.5 OCULTAR ELEMENTOS QUE NÃO DEVEM SAIR NA FOTO
+        const elementsToHide = board.querySelectorAll('.trash-zone');
+        elementsToHide.forEach((el) => {
+          const element = el as HTMLElement;
+          originalStyles.set(element, element.getAttribute('style') || '');
+          element.style.setProperty('display', 'none', 'important');
+        });
+
         // 3. FORÇAR OPACIDADE NOS CARDS
         const cards = board.querySelectorAll('.resource-card');
         cards.forEach((card) => {
