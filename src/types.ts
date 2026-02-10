@@ -7,6 +7,7 @@ export interface Resource {
     costPerDay: number;
     ignoreCost?: boolean;
     isAdministrative?: boolean;
+    dismissedAt?: string; // Data ISO da demissão (YYYY-MM-DD)
 }
 
 export interface Worksite {

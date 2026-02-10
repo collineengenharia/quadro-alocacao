@@ -14,7 +14,8 @@ import {
   Building2,
   Users,
   X,
-  Fuel as FuelIcon
+  Fuel as FuelIcon,
+  Trash2 // Importando ícone da lixeira
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { saveAs } from 'file-saver';
@@ -868,36 +869,46 @@ function App() {
 
   // Helper para renderização
   const getResourcesForSite = (siteId: string) => {
-    return resources.flatMap<{ resource: Resource; allocatedHours: number | undefined; key: string; dragId?: string; inMaintenance?: boolean }>(res => {
-      // 1. Verificar parciais
-      const partials = partialAllocations[dateKey]?.[res.id];
-      if (partials && partials.length > 0) {
-        return partials
-          .map((p, originalIndex) => ({ ...p, originalIndex })) // Preservar índice original
-          .filter(p => p.worksiteId === siteId)
-          .map((p) => ({
+    return resources
+      .filter(res => {
+        // Filtragem de demissão:
+        // Se o recurso foi demitido, ele só aparece se a data atual (dateKey) for ANTERIOR à data de demissão.
+        // Se não tiver data de demissão, aparece sempre.
+        if (res.dismissedAt && dateKey >= res.dismissedAt) {
+          return false;
+        }
+        return true;
+      })
+      .flatMap<{ resource: Resource; allocatedHours: number | undefined; key: string; dragId?: string; inMaintenance?: boolean }>(res => {
+        // 1. Verificar parciais
+        const partials = partialAllocations[dateKey]?.[res.id];
+        if (partials && partials.length > 0) {
+          return partials
+            .map((p, originalIndex) => ({ ...p, originalIndex })) // Preservar índice original
+            .filter(p => p.worksiteId === siteId)
+            .map((p) => ({
+              resource: res,
+              allocatedHours: p.hours,
+              key: `${res.id}-part-${p.originalIndex}`,
+              dragId: `partial:${res.id}:${p.originalIndex}`, // ID com índice correto
+              inMaintenance: !!p.maintenanceAfter
+            }));
+        }
+
+        // 2. Fallback para alocação padrão
+        const allocatedSite = currentAllocations[res.id] || 'pateo';
+        // Se siteId é pateo, e não tem alocação (allocatedSite é pateo), então deve aparecer
+        // Se siteId é obra-X, e allocatedSite é obra-X, deve aparecer
+        if (allocatedSite === siteId) {
+          return [{
             resource: res,
-            allocatedHours: p.hours,
-            key: `${res.id}-part-${p.originalIndex}`,
-            dragId: `partial:${res.id}:${p.originalIndex}`, // ID com índice correto
-            inMaintenance: !!p.maintenanceAfter
-          }));
-      }
+            allocatedHours: undefined, // Full day
+            key: res.id
+          }];
+        }
 
-      // 2. Fallback para alocação padrão
-      const allocatedSite = currentAllocations[res.id] || 'pateo';
-      // Se siteId é pateo, e não tem alocação (allocatedSite é pateo), então deve aparecer
-      // Se siteId é obra-X, e allocatedSite é obra-X, deve aparecer
-      if (allocatedSite === siteId) {
-        return [{
-          resource: res,
-          allocatedHours: undefined, // Full day
-          key: res.id
-        }];
-      }
-
-      return [];
-    });
+        return [];
+      });
   };
 
   const handleBulkImport = (text: string) => {
@@ -1083,6 +1094,19 @@ function App() {
     }
 
     // Comportamento normal para recursos inteiros
+    if (worksiteId === 'trash-zone') {
+      if (confirm(`Tem certeza que deseja marcar este recurso como DEMITIDO/INATIVO a partir de HOJE (${format(currentDate, 'dd/MM/yyyy')})?\n\nEle não aparecerá mais nas próximas datas, mas o histórico passado será mantido.`)) {
+        const resourceId = data;
+        setResources(prev => prev.map(r => {
+          if (r.id === resourceId) {
+            return { ...r, dismissedAt: dateKey };
+          }
+          return r;
+        }));
+      }
+      return;
+    }
+
     updateAllocation(data, worksiteId);
   };
 
@@ -1745,7 +1769,33 @@ function App() {
               ))}
             </div>
           </div>
-        </main>
+          {/* ÁREA DE DEMISSÃO (LIXEIRA) */}
+          <div
+            className="trash-zone drop-zone"
+            onDrop={(e) => onDrop(e, 'trash-zone')}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            style={{
+              marginTop: '40px',
+              border: '2px dashed #ef4444',
+              borderRadius: '12px',
+              padding: '24px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '12px',
+              color: '#ef4444',
+              backgroundColor: '#fef2f2',
+              opacity: 0.8,
+              transition: 'all 0.2s'
+            }}
+          >
+            <Trash2 size={24} />
+            <span style={{ fontWeight: '700', fontSize: '14px' }}>
+              ARRASTE AQUI PARA DEMITIR / INATIVAR (Mantém histórico passado)
+            </span>
+          </div>
+        </main >
       ) : activeTab === 'fuel' ? (
         <FuelManager
           resources={resources}
@@ -1773,7 +1823,8 @@ function App() {
           fuelQuotes={fuelQuotes}
           allocationMetadata={allocationMetadata}
         />
-      )}
+      )
+      }
 
       {/* MENU DE GESTÃO CONSOLIDADO */}
       <div style={{ position: 'fixed', bottom: '32px', left: '32px', zIndex: 100 }}>
@@ -1859,72 +1910,80 @@ function App() {
       </div>
 
       {/* COMPONENTES DE CONFIGURAÇÃO */}
-      {showWorksiteSettings && (
-        <WorksiteSettings
-          worksites={worksites}
-          onAdd={handleAddWorksite}
-          onDelete={handleDeleteWorksite}
-          onRename={handleRenameWorksite}
-          onToggleVisibility={handleToggleWorksiteVisibility}
-          onToggleAllVisibility={handleToggleAllWorksites}
-          currentDate={currentDate}
-          worksiteVisibility={worksiteVisibility[dateKey] || {}}
-          allocationsForDate={currentAllocations}
-          resources={resources}
-          onClose={() => setShowWorksiteSettings(false)}
-        />
-      )}
+      {
+        showWorksiteSettings && (
+          <WorksiteSettings
+            worksites={worksites}
+            onAdd={handleAddWorksite}
+            onDelete={handleDeleteWorksite}
+            onRename={handleRenameWorksite}
+            onToggleVisibility={handleToggleWorksiteVisibility}
+            onToggleAllVisibility={handleToggleAllWorksites}
+            currentDate={currentDate}
+            worksiteVisibility={worksiteVisibility[dateKey] || {}}
+            allocationsForDate={currentAllocations}
+            resources={resources}
+            onClose={() => setShowWorksiteSettings(false)}
+          />
+        )
+      }
 
-      {showResourceSettings && (
-        <ResourceSettings
-          resources={resources}
-          onAdd={handleAddResource}
-          onUpdate={handleUpdateResource}
-          onDelete={handleDeleteResource}
-          onBulkImport={handleBulkImport}
-          onClose={() => setShowResourceSettings(false)}
-        />
-      )}
+      {
+        showResourceSettings && (
+          <ResourceSettings
+            resources={resources}
+            onAdd={handleAddResource}
+            onUpdate={handleUpdateResource}
+            onDelete={handleDeleteResource}
+            onBulkImport={handleBulkImport}
+            onClose={() => setShowResourceSettings(false)}
+          />
+        )
+      }
 
-      {showOvertimeModal && overtimeResourceId && (
-        <OvertimeModal
-          resource={resources.find(r => r.id === overtimeResourceId)!}
-          currentOvertime={overtime[dateKey]?.[overtimeResourceId]}
-          onSave={(entry) => {
-            setOvertime(prev => ({
-              ...prev,
-              [dateKey]: {
-                ...(prev[dateKey] || {}),
-                [overtimeResourceId]: entry
-              }
-            }));
-            setShowOvertimeModal(false);
-          }}
-          onDelete={() => {
-            setOvertime(prev => {
-              const newOvertime = { ...prev };
-              if (newOvertime[dateKey]) {
-                delete newOvertime[dateKey][overtimeResourceId];
-              }
-              return newOvertime;
-            });
-            setShowOvertimeModal(false);
-          }}
-          onClose={() => setShowOvertimeModal(false)}
-        />
-      )}
+      {
+        showOvertimeModal && overtimeResourceId && (
+          <OvertimeModal
+            resource={resources.find(r => r.id === overtimeResourceId)!}
+            currentOvertime={overtime[dateKey]?.[overtimeResourceId]}
+            onSave={(entry) => {
+              setOvertime(prev => ({
+                ...prev,
+                [dateKey]: {
+                  ...(prev[dateKey] || {}),
+                  [overtimeResourceId]: entry
+                }
+              }));
+              setShowOvertimeModal(false);
+            }}
+            onDelete={() => {
+              setOvertime(prev => {
+                const newOvertime = { ...prev };
+                if (newOvertime[dateKey]) {
+                  delete newOvertime[dateKey][overtimeResourceId];
+                }
+                return newOvertime;
+              });
+              setShowOvertimeModal(false);
+            }}
+            onClose={() => setShowOvertimeModal(false)}
+          />
+        )
+      }
 
-      {showHourSplitModal && hourSplitResourceId && (
-        <HourSplitModal
-          resource={resources.find(r => r.id === hourSplitResourceId)!}
-          currentDate={currentDate}
-          currentHours={partialAllocations[dateKey]?.[hourSplitResourceId]?.[0]?.hours}
-          onSave={handleSaveHourSplit}
-          onDelete={handleDeleteHourSplit}
-          onClose={() => setShowHourSplitModal(false)}
-        />
-      )}
-    </div>
+      {
+        showHourSplitModal && hourSplitResourceId && (
+          <HourSplitModal
+            resource={resources.find(r => r.id === hourSplitResourceId)!}
+            currentDate={currentDate}
+            currentHours={partialAllocations[dateKey]?.[hourSplitResourceId]?.[0]?.hours}
+            onSave={handleSaveHourSplit}
+            onDelete={handleDeleteHourSplit}
+            onClose={() => setShowHourSplitModal(false)}
+          />
+        )
+      }
+    </div >
   );
 }
 
