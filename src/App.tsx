@@ -435,9 +435,8 @@ function App() {
         const { data, error } = await supabase
           .from('app_state')
           .select('state')
-          .order('updated_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+          .eq('user_id', '00000000-0000-0000-0000-000000000000') // ID ÚNICO GLOBAL DO QUADRO
+          .single();
 
         if (error) {
           console.error('Erro ao carregar do Supabase:', error);
@@ -511,7 +510,7 @@ function App() {
           event: '*', // Escuta INSERT e UPDATE
           schema: 'public',
           table: 'app_state',
-          // REMOVIDO FILTRO DE USER_ID: Agora todos os usuários ouvem as mudanças de todos.
+          filter: 'user_id=eq.00000000-0000-0000-0000-000000000000' // Foca apenas na linha mestre
         },
         (payload: any) => {
           console.log('🔄 Atualização Real-time Recebida!', payload);
@@ -560,7 +559,7 @@ function App() {
 
       const { error } = await supabase
         .from('app_state')
-        .upsert({ user_id: user.id, state, updated_at: new Date().toISOString() }, { onConflict: 'user_id' }); // Cada um salva no seu, mas todos ouvem todos.
+        .upsert({ user_id: '00000000-0000-0000-0000-000000000000', state, updated_at: new Date().toISOString() }, { onConflict: 'user_id' }); // Salva sempre na mesma linha mestre
 
       if (error) console.error('Erro ao salvar no Supabase:', error);
     }, 2000);
