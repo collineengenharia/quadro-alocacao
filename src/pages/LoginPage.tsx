@@ -6,30 +6,19 @@ export const LoginPage = () => {
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
-    const [mode, setMode] = useState<'login' | 'register'>('login');
-    const [successMessage, setSuccessMessage] = useState('');
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsLoading(true);
         setError('');
-        setSuccessMessage('');
 
         try {
-            if (mode === 'login') {
-                const { error } = await supabase.auth.signInWithPassword({ email, password });
-                if (error) throw error;
-            } else {
-                const { error } = await supabase.auth.signUp({ email, password });
-                if (error) throw error;
-                setSuccessMessage('Conta criada! Verifique seu e-mail para confirmar o acesso.');
-            }
+            const { error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) throw error;
         } catch (err: any) {
             const msg = err?.message || 'Erro desconhecido';
             if (msg.includes('Invalid login credentials')) {
                 setError('E-mail ou senha incorretos.');
-            } else if (msg.includes('User already registered')) {
-                setError('Este e-mail já está cadastrado. Tente fazer login.');
             } else {
                 setError(msg);
             }
@@ -93,26 +82,6 @@ export const LoginPage = () => {
                     </p>
                 </div>
 
-                {/* Toggle Login / Register */}
-                <div style={{
-                    display: 'flex', background: 'rgba(255,255,255,0.06)',
-                    padding: '4px', borderRadius: '14px', marginBottom: '28px',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                }}>
-                    {(['login', 'register'] as const).map((m) => (
-                        <button key={m} onClick={() => { setMode(m); setError(''); setSuccessMessage(''); }}
-                            style={{
-                                flex: 1, padding: '10px', border: 'none', borderRadius: '11px', cursor: 'pointer',
-                                fontWeight: '700', fontSize: '13px', transition: 'all 0.2s',
-                                background: mode === m ? '#3b82f6' : 'transparent',
-                                color: mode === m ? 'white' : 'rgba(255,255,255,0.5)',
-                                boxShadow: mode === m ? '0 4px 12px rgba(59,130,246,0.35)' : 'none',
-                            }}>
-                            {m === 'login' ? '🔑 Entrar' : '✨ Criar Conta'}
-                        </button>
-                    ))}
-                </div>
-
                 {/* Form */}
                 <form onSubmit={handleSubmit}>
                     <div style={{ marginBottom: '16px' }}>
@@ -159,9 +128,6 @@ export const LoginPage = () => {
                             onFocus={e => e.currentTarget.style.borderColor = '#3b82f6'}
                             onBlur={e => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)'}
                         />
-                        {mode === 'register' && (
-                            <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginTop: '6px' }}>Mínimo 6 caracteres</p>
-                        )}
                     </div>
 
                     {error && (
@@ -171,16 +137,6 @@ export const LoginPage = () => {
                             color: '#fca5a5', fontSize: '13px', fontWeight: '500',
                         }}>
                             ⚠️ {error}
-                        </div>
-                    )}
-
-                    {successMessage && (
-                        <div style={{
-                            background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)',
-                            borderRadius: '10px', padding: '12px', marginBottom: '16px',
-                            color: '#6ee7b7', fontSize: '13px', fontWeight: '500',
-                        }}>
-                            ✅ {successMessage}
                         </div>
                     )}
 
@@ -195,7 +151,7 @@ export const LoginPage = () => {
                             boxShadow: isLoading ? 'none' : '0 8px 20px rgba(59,130,246,0.35)',
                             fontFamily: 'inherit',
                         }}>
-                        {isLoading ? '⏳ Aguarde...' : mode === 'login' ? '🔑 Entrar no Sistema' : '✨ Criar Minha Conta'}
+                        {isLoading ? '⏳ Aguarde...' : '🔑 Entrar no Sistema'}
                     </button>
                 </form>
 
