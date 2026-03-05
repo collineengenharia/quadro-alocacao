@@ -38,8 +38,14 @@ export const WorksiteSettings: React.FC<WorksiteSettingsProps> = ({
 
     const handleAdd = (e: React.FormEvent) => {
         e.preventDefault();
-        if (newWorksiteName.trim()) {
-            onAdd(newWorksiteName.trim());
+        const trimmed = newWorksiteName.trim();
+        if (trimmed) {
+            const exists = worksites.some(ws => ws.name.toLowerCase() === trimmed.toLowerCase());
+            if (exists) {
+                alert(`Já existe uma obra cadastrada com o nome "${trimmed}".`);
+                return;
+            }
+            onAdd(trimmed);
             setNewWorksiteName('');
         }
     };
@@ -55,8 +61,14 @@ export const WorksiteSettings: React.FC<WorksiteSettingsProps> = ({
     };
 
     const handleSaveRename = (id: string) => {
-        if (editingName.trim()) {
-            onRename(id, editingName.trim());
+        const trimmed = editingName.trim();
+        if (trimmed) {
+            const exists = worksites.some(ws => ws.id !== id && ws.name.toLowerCase() === trimmed.toLowerCase());
+            if (exists) {
+                alert(`Já existe uma obra cadastrada com o nome "${trimmed}".`);
+                return;
+            }
+            onRename(id, trimmed);
             setEditingId(null);
         }
     };

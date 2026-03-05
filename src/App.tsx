@@ -579,11 +579,20 @@ function App() {
 
   // -- Gestão de Obras --
   const handleAddWorksite = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    // CORREÇÃO: Impedir nomes duplicados (ignorando maiúsculas/minúsculas)
+    if (worksites.some(ws => ws.name.toLowerCase() === trimmed.toLowerCase())) {
+      console.warn(`Obra duplicada ignorada: ${trimmed}`);
+      return;
+    }
+
     const colorIndex = (worksites.length % 5) + 1;
     const newWs: Worksite = {
-      id: `obra - ${Date.now()} `,
-      name,
-      color: `obra - ${colorIndex} `,
+      id: `obra-${Date.now()}`,
+      name: trimmed,
+      color: `obra-${colorIndex}`,
       visible: true
     };
     setWorksites([...worksites, newWs]);
@@ -605,7 +614,16 @@ function App() {
   };
 
   const handleRenameWorksite = (id: string, newName: string) => {
-    setWorksites(worksites.map(w => w.id === id ? { ...w, name: newName } : w));
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+
+    // CORREÇÃO: Impedir renomear para um nome já existente
+    if (worksites.some(ws => ws.id !== id && ws.name.toLowerCase() === trimmed.toLowerCase())) {
+      console.warn(`Tentativa de renomear para obra duplicada ignorada: ${trimmed}`);
+      return;
+    }
+
+    setWorksites(worksites.map(w => w.id === id ? { ...w, name: trimmed } : w));
   };
 
   const handleToggleWorksiteVisibility = (id: string) => {
@@ -1001,6 +1019,17 @@ function App() {
         [resourceId]: siteId
       }
     }));
+
+    // CORREÇÃO: Limpar alocações parciais antigas ao mover integralmente
+    setPartialAllocations(prev => {
+      const dayPartials = { ...prev[dateKey] };
+      if (dayPartials[resourceId]) {
+        delete dayPartials[resourceId];
+        return { ...prev, [dateKey]: dayPartials };
+      }
+      return prev;
+    });
+
     setSelectedResourceId(null); // Limpar seleção após alocar
   };
 
