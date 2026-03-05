@@ -435,10 +435,11 @@ function App() {
         const { data, error } = await supabase
           .from('app_state')
           .select('state')
-          .single(); // Tentar pegar a primeira linha disponível do sistema (quadro de alocação único)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-        if (error && error.code !== 'PGRST116') {
-          // PGRST116 = nenhuma linha — normal
+        if (error) {
           console.error('Erro ao carregar do Supabase:', error);
         }
 
