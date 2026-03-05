@@ -155,8 +155,8 @@ export const LoginPage = () => {
                     </button>
                 </form>
 
-                <p style={{ textAlign: 'center', marginTop: '24px', fontSize: '12px', color: 'rgba(255,255,255,0.25)' }}>
-                    Acesso restrito · Colline Engenharia
+                <p style={{ textAlign: 'center', marginTop: '24px', fontSize: '11px', color: 'rgba(255,255,255,0.2)' }}>
+                    Acesso restrito · Colline Engenharia · <b>V2.1</b>
                 </p>
             </div>
         </div>

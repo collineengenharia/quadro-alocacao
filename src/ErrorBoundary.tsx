@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { Component, type ReactNode } from "react";
 
 interface Props {

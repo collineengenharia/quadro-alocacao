@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import * as React from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { format, addDays, subDays, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import {
@@ -88,7 +89,7 @@ const ResourceCard = ({ resource, onDragStart, onDragEnd, onClick, isSelected, o
         e.stopPropagation();
         if (!inMaintenance) onClick?.();
       }}
-      className={`resource-card animate-scale-in ${isSelected ? 'ring-2 ring-blue-500 ring-offset-2' : ''} ${inMaintenance ? 'in-maintenance' : ''}`}
+      className={`resource - card animate - scale -in ${isSelected ? 'ring-2 ring-blue-500 ring-offset-2' : ''} ${inMaintenance ? 'in-maintenance' : ''} `}
       style={{
         cursor: isDraggable ? 'grab' : 'not-allowed',
         position: 'relative',
@@ -235,7 +236,7 @@ const ResourceCard = ({ resource, onDragStart, onDragEnd, onClick, isSelected, o
       <img
         src={resource.photo}
         alt={resource.name}
-        className={`resource-card-photo ${resource.type}`}
+        className={`resource - card - photo ${resource.type} `}
       />
       <div className="resource-card-name">{resource.name}</div>
       <div className="resource-card-role">{resource.role}</div>
@@ -580,9 +581,9 @@ function App() {
   const handleAddWorksite = (name: string) => {
     const colorIndex = (worksites.length % 5) + 1;
     const newWs: Worksite = {
-      id: `obra-${Date.now()}`,
+      id: `obra - ${Date.now()} `,
       name,
-      color: `obra-${colorIndex}`,
+      color: `obra - ${colorIndex} `,
       visible: true
     };
     setWorksites([...worksites, newWs]);
@@ -617,7 +618,7 @@ function App() {
 
       if (allocatedResources.length > 0) {
         const resourceNames = allocatedResources.map(r => r.name).join(', ');
-        alert(`\u26a0\ufe0f N\u00e3o \u00e9 poss\u00edvel ocultar esta obra!\n\nRecursos alocados: ${resourceNames}\n\nRemova todos os recursos desta obra antes de ocult\u00e1-la.`);
+        alert(`\u26a0\ufe0f N\u00e3o \u00e9 poss\u00edvel ocultar esta obra!\n\nRecursos alocados: ${resourceNames} \n\nRemova todos os recursos desta obra antes de ocult\u00e1 - la.`);
         return;
       }
     }
@@ -669,7 +670,7 @@ function App() {
       return;
     }
 
-    const confirm = window.confirm(`📥 Colar quadro copiado nesta data?\n\nIsso substituirá as alocações e observações atuais.`);
+    const confirm = window.confirm(`📥 Colar quadro copiado nesta data ?\n\nIsso substituirá as alocações e observações atuais.`);
     if (!confirm) return;
 
     // Ajuste para Sexta-feira (Máximo 8h)
@@ -899,8 +900,8 @@ function App() {
             .map((p) => ({
               resource: res,
               allocatedHours: p.hours,
-              key: `${res.id}-part-${p.originalIndex}`,
-              dragId: `partial:${res.id}:${p.originalIndex}`, // ID com índice correto
+              key: `${res.id} -part - ${p.originalIndex} `,
+              dragId: `partial:${res.id}:${p.originalIndex} `, // ID com índice correto
               inMaintenance: !!p.maintenanceAfter
             }));
         }
@@ -944,7 +945,7 @@ function App() {
             const role = parts[1].trim();
             const valueStr = parts[2] ? parts[2].replace('R$', '').replace('.', '').replace(',', '.').trim() : '0';
             newResources.push({
-              id: `res-${Date.now()}-${Math.random()}`,
+              id: `res - ${Date.now()} -${Math.random()} `,
               name,
               type: 'employee',
               role,
