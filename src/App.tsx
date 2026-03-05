@@ -499,6 +499,51 @@ function App() {
     };
 
     loadFromSupabase();
+
+    // === INÍCIO MÓDULO REAL-TIME ===
+    // Configura um ouvinte para o Supabase. Quando qualquer mudança acontecer no banco,
+    // (de outras abas do mesmo usuário), o aplicativo vai baixar e atualizar a tela sozinho.
+    const subscription = supabase
+      .channel('schema-db-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Escuta INSERT e UPDATE
+          schema: 'public',
+          table: 'app_state',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload: any) => {
+          console.log('🔄 Atualização Real-time Recebida!', payload);
+          if (payload.new && payload.new.state) {
+            const s = payload.new.state as any;
+            if (Array.isArray(s.resources)) setResources(s.resources);
+            if (Array.isArray(s.worksites) && s.worksites.length > 0) setWorksites(s.worksites);
+            if (s.allocations) setAllocations(s.allocations);
+            if (s.observations) setObservations(s.observations);
+            if (s.worksiteVisibility) setWorksiteVisibility(s.worksiteVisibility);
+            if (s.allocationMetadata) setAllocationMetadata(s.allocationMetadata);
+            if (s.overtime) setOvertime(s.overtime);
+            if (s.resourceLinks) setResourceLinks(s.resourceLinks);
+            if (s.maintenanceHistory) setMaintenanceHistory(s.maintenanceHistory);
+            if (s.partialAllocations) setPartialAllocations(s.partialAllocations);
+            if (s.fuelData) setFuelData(s.fuelData);
+            if (s.fuelQuotes) setFuelQuotes(s.fuelQuotes);
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('🔗 Conectado ao Real-time do Supabase!');
+        }
+      });
+
+    // Limpeza da subscription quando o componente desmonta ou o usuário muda
+    return () => {
+      supabase.removeChannel(subscription);
+    };
+    // === FIM MÓDULO REAL-TIME ===
+
   }, [user]);
 
   // === SALVAR DADOS NO SUPABASE (com debounce de 2s para evitar muitas requisições) ===
