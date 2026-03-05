@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { format, addDays, subDays, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import {
@@ -14,10 +14,14 @@ import {
   Building2,
   Users,
   X,
-  Fuel as FuelIcon
+  Fuel as FuelIcon,
+  Trash2,
+  LogOut
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { saveAs } from 'file-saver';
+import { supabase } from './lib/supabase';
+import { useAuth } from './contexts/AuthContext';
 import { ResourceSettings } from './components/ResourceSettings';
 import { AnalyticalDashboard } from './components/AnalyticalDashboard';
 import { WorksiteSettings } from './components/WorksiteSettings';
@@ -384,6 +388,7 @@ const OvertimeModal = ({ resource, currentOvertime, onSave, onDelete, onClose }:
 };
 
 function App() {
+  const { user, signOut } = useAuth();
   const [activeTab, setActiveTab] = useState<'board' | 'analytics' | 'fuel'>('board');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [resources, setResources] = useState<Resource[]>([]);
@@ -418,98 +423,104 @@ function App() {
 
   const boardRef = useRef<HTMLDivElement>(null);
 
+  const [dataLoaded, setDataLoaded] = useState(false);
+
+  // === CARREGAR DADOS DO SUPABASE ===
   useEffect(() => {
-    try {
-      const savedResources = localStorage.getItem('colline_resources');
-      const savedWorksites = localStorage.getItem('colline_worksites');
-      const savedAllocations = localStorage.getItem('colline_history');
-      const savedObservations = localStorage.getItem('colline_observations');
-      const savedWorksiteVisibility = localStorage.getItem('colline_worksite_visibility');
-      const savedMetadata = localStorage.getItem('colline_allocation_metadata');
-      const savedOvertime = localStorage.getItem('colline_overtime');
-      const savedLinks = localStorage.getItem('colline_resource_links');
-      const savedMaintenance = localStorage.getItem('colline_maintenance');
-      const savedPartialAllocations = localStorage.getItem('colline_partial_allocations');
+    if (!user) return;
 
-      const savedFuel = localStorage.getItem('colline_fuel_data');
-      const savedFuelQuotes = localStorage.getItem('colline_fuel_quotes');
+    const loadFromSupabase = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('app_state')
+          .select('state')
+          .eq('user_id', user.id)
+          .single();
 
-      if (savedResources) {
-        const parsed = JSON.parse(savedResources);
-        if (Array.isArray(parsed)) setResources(parsed);
-      }
+        if (error && error.code !== 'PGRST116') {
+          // PGRST116 = nenhuma linha (usuário novo) — normal
+          console.error('Erro ao carregar do Supabase:', error);
+        }
 
-      if (savedWorksites) {
-        const parsed = JSON.parse(savedWorksites);
-        if (Array.isArray(parsed)) setWorksites(parsed);
-      } else {
-        setWorksites(DEFAULT_WORKSITES);
-      }
+        if (data?.state) {
+          const s = data.state;
+          if (Array.isArray(s.resources)) setResources(s.resources);
+          if (Array.isArray(s.worksites) && s.worksites.length > 0) setWorksites(s.worksites);
+          else setWorksites(DEFAULT_WORKSITES);
+          if (s.allocations) setAllocations(s.allocations);
+          if (s.observations) setObservations(s.observations);
+          if (s.worksiteVisibility) setWorksiteVisibility(s.worksiteVisibility);
+          if (s.allocationMetadata) setAllocationMetadata(s.allocationMetadata);
+          if (s.overtime) setOvertime(s.overtime);
+          if (s.resourceLinks) setResourceLinks(s.resourceLinks);
+          if (s.maintenanceHistory) setMaintenanceHistory(s.maintenanceHistory);
+          if (s.partialAllocations) setPartialAllocations(s.partialAllocations);
+          if (s.fuelData) setFuelData(s.fuelData);
+          if (s.fuelQuotes) setFuelQuotes(s.fuelQuotes);
+        } else {
+          // Usuário novo: carregar dados do localStorage como migração
+          try {
+            const savedResources = localStorage.getItem('colline_resources');
+            const savedWorksites = localStorage.getItem('colline_worksites');
+            const savedAllocations = localStorage.getItem('colline_history');
+            const savedObservations = localStorage.getItem('colline_observations');
+            const savedWorksiteVisibility = localStorage.getItem('colline_worksite_visibility');
+            const savedMetadata = localStorage.getItem('colline_allocation_metadata');
+            const savedOvertime = localStorage.getItem('colline_overtime');
+            const savedLinks = localStorage.getItem('colline_resource_links');
+            const savedMaintenance = localStorage.getItem('colline_maintenance');
+            const savedPartialAllocations = localStorage.getItem('colline_partial_allocations');
+            const savedFuel = localStorage.getItem('colline_fuel_data');
+            const savedFuelQuotes = localStorage.getItem('colline_fuel_quotes');
 
-      if (savedAllocations) {
-        const parsed = JSON.parse(savedAllocations);
-        if (parsed && typeof parsed === 'object') setAllocations(parsed);
+            if (savedResources) { const p = JSON.parse(savedResources); if (Array.isArray(p)) setResources(p); }
+            if (savedWorksites) { const p = JSON.parse(savedWorksites); if (Array.isArray(p) && p.length > 0) setWorksites(p); else setWorksites(DEFAULT_WORKSITES); }
+            else setWorksites(DEFAULT_WORKSITES);
+            if (savedAllocations) { const p = JSON.parse(savedAllocations); if (p && typeof p === 'object') setAllocations(p); }
+            if (savedObservations) { const p = JSON.parse(savedObservations); if (p && typeof p === 'object') setObservations(p); }
+            if (savedWorksiteVisibility) { const p = JSON.parse(savedWorksiteVisibility); if (p && typeof p === 'object') setWorksiteVisibility(p); }
+            if (savedMetadata) { const p = JSON.parse(savedMetadata); if (p && typeof p === 'object') setAllocationMetadata(p); }
+            if (savedOvertime) { const p = JSON.parse(savedOvertime); if (p && typeof p === 'object') setOvertime(p); }
+            if (savedLinks) { const p = JSON.parse(savedLinks); if (p && typeof p === 'object') setResourceLinks(p); }
+            if (savedMaintenance) { const p = JSON.parse(savedMaintenance); if (p && typeof p === 'object') setMaintenanceHistory(p); }
+            if (savedPartialAllocations) { const p = JSON.parse(savedPartialAllocations); if (p && typeof p === 'object') setPartialAllocations(p); }
+            if (savedFuel) { const p = JSON.parse(savedFuel); if (p && typeof p === 'object') setFuelData(p); }
+            if (savedFuelQuotes) { const p = JSON.parse(savedFuelQuotes); if (p && typeof p === 'object') setFuelQuotes(p); }
+          } catch (localErr) {
+            console.error('Erro ao carregar do localStorage:', localErr);
+          }
+        }
+      } catch (err) {
+        console.error('Erro geral ao carregar dados:', err);
+      } finally {
+        setDataLoaded(true);
       }
+    };
 
-      if (savedObservations) {
-        const parsed = JSON.parse(savedObservations);
-        if (parsed && typeof parsed === 'object') setObservations(parsed);
-      }
+    loadFromSupabase();
+  }, [user]);
 
-      if (savedWorksiteVisibility) {
-        const parsed = JSON.parse(savedWorksiteVisibility);
-        if (parsed && typeof parsed === 'object') setWorksiteVisibility(parsed);
-      }
-
-      if (savedMetadata) {
-        const parsed = JSON.parse(savedMetadata);
-        if (parsed && typeof parsed === 'object') setAllocationMetadata(parsed);
-      }
-
-      if (savedOvertime) {
-        const parsed = JSON.parse(savedOvertime);
-        if (parsed && typeof parsed === 'object') setOvertime(parsed);
-      }
-
-      if (savedLinks) {
-        const parsed = JSON.parse(savedLinks);
-        if (parsed && typeof parsed === 'object') setResourceLinks(parsed);
-      }
-      if (savedMaintenance) {
-        const parsed = JSON.parse(savedMaintenance);
-        if (parsed && typeof parsed === 'object') setMaintenanceHistory(parsed);
-      }
-      if (savedPartialAllocations) {
-        const parsed = JSON.parse(savedPartialAllocations);
-        if (parsed && typeof parsed === 'object') setPartialAllocations(parsed);
-      }
-      if (savedFuel) {
-        const parsed = JSON.parse(savedFuel);
-        if (parsed && typeof parsed === 'object') setFuelData(parsed);
-      }
-      if (savedFuelQuotes) {
-        const parsed = JSON.parse(savedFuelQuotes);
-        if (parsed && typeof parsed === 'object') setFuelQuotes(parsed);
-      }
-    } catch (err) {
-      console.error("Erro ao carregar dados salvos:", err);
-    }
-  }, []);
-
+  // === SALVAR DADOS NO SUPABASE (com debounce de 2s para evitar muitas requisições) ===
   useEffect(() => {
-    localStorage.setItem('colline_resources', JSON.stringify(resources));
-    localStorage.setItem('colline_worksites', JSON.stringify(worksites));
-    localStorage.setItem('colline_history', JSON.stringify(allocations));
-    localStorage.setItem('colline_observations', JSON.stringify(observations));
-    localStorage.setItem('colline_worksite_visibility', JSON.stringify(worksiteVisibility));
-    localStorage.setItem('colline_allocation_metadata', JSON.stringify(allocationMetadata));
-    localStorage.setItem('colline_overtime', JSON.stringify(overtime));
-    localStorage.setItem('colline_resource_links', JSON.stringify(resourceLinks));
-    localStorage.setItem('colline_maintenance', JSON.stringify(maintenanceHistory));
-    localStorage.setItem('colline_partial_allocations', JSON.stringify(partialAllocations));
-    localStorage.setItem('colline_fuel_data', JSON.stringify(fuelData));
-    localStorage.setItem('colline_fuel_quotes', JSON.stringify(fuelQuotes));
-  }, [resources, worksites, allocations, observations, worksiteVisibility, allocationMetadata, overtime, resourceLinks, maintenanceHistory, partialAllocations, fuelData, fuelQuotes]);
+    if (!user || !dataLoaded) return;
+
+    const timer = setTimeout(async () => {
+      const state = {
+        resources, worksites, allocations, observations,
+        worksiteVisibility, allocationMetadata, overtime,
+        resourceLinks, maintenanceHistory, partialAllocations,
+        fuelData, fuelQuotes,
+      };
+
+      const { error } = await supabase
+        .from('app_state')
+        .upsert({ user_id: user.id, state, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
+
+      if (error) console.error('Erro ao salvar no Supabase:', error);
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [user, dataLoaded, resources, worksites, allocations, observations, worksiteVisibility, allocationMetadata, overtime, resourceLinks, maintenanceHistory, partialAllocations, fuelData, fuelQuotes]);
 
   const dateKey = format(currentDate, 'yyyy-MM-dd');
   const currentAllocations = allocations[dateKey] || {};
@@ -868,36 +879,46 @@ function App() {
 
   // Helper para renderização
   const getResourcesForSite = (siteId: string) => {
-    return resources.flatMap<{ resource: Resource; allocatedHours: number | undefined; key: string; dragId?: string; inMaintenance?: boolean }>(res => {
-      // 1. Verificar parciais
-      const partials = partialAllocations[dateKey]?.[res.id];
-      if (partials && partials.length > 0) {
-        return partials
-          .map((p, originalIndex) => ({ ...p, originalIndex })) // Preservar índice original
-          .filter(p => p.worksiteId === siteId)
-          .map((p) => ({
+    return resources
+      .filter(res => {
+        // Filtragem de demissão:
+        // Se o recurso foi demitido, ele só aparece se a data atual (dateKey) for ANTERIOR à data de demissão.
+        // Se não tiver data de demissão, aparece sempre.
+        if (res.dismissedAt && dateKey >= res.dismissedAt) {
+          return false;
+        }
+        return true;
+      })
+      .flatMap<{ resource: Resource; allocatedHours: number | undefined; key: string; dragId?: string; inMaintenance?: boolean }>(res => {
+        // 1. Verificar parciais
+        const partials = partialAllocations[dateKey]?.[res.id];
+        if (partials && partials.length > 0) {
+          return partials
+            .map((p, originalIndex) => ({ ...p, originalIndex })) // Preservar índice original
+            .filter(p => p.worksiteId === siteId)
+            .map((p) => ({
+              resource: res,
+              allocatedHours: p.hours,
+              key: `${res.id}-part-${p.originalIndex}`,
+              dragId: `partial:${res.id}:${p.originalIndex}`, // ID com índice correto
+              inMaintenance: !!p.maintenanceAfter
+            }));
+        }
+
+        // 2. Fallback para alocação padrão
+        const allocatedSite = currentAllocations[res.id] || 'pateo';
+        // Se siteId é pateo, e não tem alocação (allocatedSite é pateo), então deve aparecer
+        // Se siteId é obra-X, e allocatedSite é obra-X, deve aparecer
+        if (allocatedSite === siteId) {
+          return [{
             resource: res,
-            allocatedHours: p.hours,
-            key: `${res.id}-part-${p.originalIndex}`,
-            dragId: `partial:${res.id}:${p.originalIndex}`, // ID com índice correto
-            inMaintenance: !!p.maintenanceAfter
-          }));
-      }
+            allocatedHours: undefined, // Full day
+            key: res.id
+          }];
+        }
 
-      // 2. Fallback para alocação padrão
-      const allocatedSite = currentAllocations[res.id] || 'pateo';
-      // Se siteId é pateo, e não tem alocação (allocatedSite é pateo), então deve aparecer
-      // Se siteId é obra-X, e allocatedSite é obra-X, deve aparecer
-      if (allocatedSite === siteId) {
-        return [{
-          resource: res,
-          allocatedHours: undefined, // Full day
-          key: res.id
-        }];
-      }
-
-      return [];
-    });
+        return [];
+      });
   };
 
   const handleBulkImport = (text: string) => {
@@ -1083,6 +1104,19 @@ function App() {
     }
 
     // Comportamento normal para recursos inteiros
+    if (worksiteId === 'trash-zone') {
+      if (confirm(`Tem certeza que deseja marcar este recurso como DEMITIDO/INATIVO a partir de HOJE (${format(currentDate, 'dd/MM/yyyy')})?\n\nEle não aparecerá mais nas próximas datas, mas o histórico passado será mantido.`)) {
+        const resourceId = data;
+        setResources(prev => prev.map(r => {
+          if (r.id === resourceId) {
+            return { ...r, dismissedAt: dateKey };
+          }
+          return r;
+        }));
+      }
+      return;
+    }
+
     updateAllocation(data, worksiteId);
   };
 
@@ -1254,6 +1288,14 @@ function App() {
           }
         });
 
+        // 2.5 OCULTAR ELEMENTOS QUE NÃO DEVEM SAIR NA FOTO
+        const elementsToHide = board.querySelectorAll('.trash-zone');
+        elementsToHide.forEach((el) => {
+          const element = el as HTMLElement;
+          originalStyles.set(element, element.getAttribute('style') || '');
+          element.style.setProperty('display', 'none', 'important');
+        });
+
         // 3. FORÇAR OPACIDADE NOS CARDS
         const cards = board.querySelectorAll('.resource-card');
         cards.forEach((card) => {
@@ -1290,31 +1332,11 @@ function App() {
           }
         });
 
-        // 3.5 LIMPEZA RECURSIVA DE FILTROS/OPACIDADE/ANIMAÇÃO
-        const allElements = board.querySelectorAll('*');
-        allElements.forEach((el) => {
-          const element = el as HTMLElement;
+        // 3.5 LIMPEZA GLOBAL VIA CLASSE CSS (muito mais rápido que iterar cada elemento)
+        document.body.classList.add('capturing-screenshot');
 
-          // Ignorar o header que acabamos de injetar
-          if (headerElement && headerElement.contains(element)) return;
-
-          // SALVAR PRIMEIRO antes de modificar qualquer coisa
-          if (!originalStyles.has(element)) {
-            originalStyles.set(element, element.getAttribute('style') || '');
-          }
-
-          // Desativar animações e transições em tudo
-          element.style.setProperty('animation', 'none', 'important');
-          element.style.setProperty('transition', 'none', 'important');
-          element.style.setProperty('opacity', '1', 'important');
-          element.style.setProperty('filter', 'none', 'important');
-          element.style.setProperty('backdrop-filter', 'none', 'important');
-          element.style.setProperty('-webkit-backdrop-filter', 'none', 'important');
-          element.style.setProperty('-webkit-filter', 'none', 'important');
-        });
-
-        // 4. AGUARDAR RENDERIZAÇÃO
-        await new Promise(resolve => setTimeout(resolve, 800));
+        // 4. AGUARDAR RENDERIZAÇÃO (reduzido de 800ms para 200ms)
+        await new Promise(resolve => setTimeout(resolve, 200));
 
         // 5. CAPTURAR E SALVAR (JPEG)
         // Pegar dimensões REAIS do elemento para não cortar nada
@@ -1351,6 +1373,9 @@ function App() {
         alert("Erro ao gerar imagem");
       } finally {
         // 7. RESTAURAR ESTADO ORIGINAL
+
+        // Remover a classe global de captura
+        document.body.classList.remove('capturing-screenshot');
 
         // Remover header
         if (headerElement) {
@@ -1646,6 +1671,29 @@ function App() {
                 onChange={(e) => e.target.files?.[0] && handleImportBackup(e.target.files[0])}
               />
             </label>
+            {/* Botão de Logout */}
+            <button
+              onClick={async () => {
+                if (confirm('Deseja sair do sistema?')) await signOut();
+              }}
+              className="btn"
+              style={{
+                fontSize: '13px',
+                padding: '8px 14px',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: '#fee2e2',
+                color: '#dc2626',
+                border: '1px solid #fecaca',
+                fontWeight: '700',
+                cursor: 'pointer'
+              }}
+              title={`Sair (${user?.email})`}
+            >
+              <LogOut size={16} /> Sair
+            </button>
           </div>
         </div>
       </header>
@@ -1745,7 +1793,33 @@ function App() {
               ))}
             </div>
           </div>
-        </main>
+          {/* ÁREA DE DEMISSÃO (LIXEIRA) */}
+          <div
+            className="trash-zone drop-zone"
+            onDrop={(e) => onDrop(e, 'trash-zone')}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            style={{
+              marginTop: '40px',
+              border: '2px dashed #ef4444',
+              borderRadius: '12px',
+              padding: '24px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '12px',
+              color: '#ef4444',
+              backgroundColor: '#fef2f2',
+              opacity: 0.8,
+              transition: 'all 0.2s'
+            }}
+          >
+            <Trash2 size={24} />
+            <span style={{ fontWeight: '700', fontSize: '14px' }}>
+              ARRASTE AQUI PARA DEMITIR / INATIVAR (Mantém histórico passado)
+            </span>
+          </div>
+        </main >
       ) : activeTab === 'fuel' ? (
         <FuelManager
           resources={resources}
@@ -1773,7 +1847,8 @@ function App() {
           fuelQuotes={fuelQuotes}
           allocationMetadata={allocationMetadata}
         />
-      )}
+      )
+      }
 
       {/* MENU DE GESTÃO CONSOLIDADO */}
       <div style={{ position: 'fixed', bottom: '32px', left: '32px', zIndex: 100 }}>
@@ -1859,72 +1934,80 @@ function App() {
       </div>
 
       {/* COMPONENTES DE CONFIGURAÇÃO */}
-      {showWorksiteSettings && (
-        <WorksiteSettings
-          worksites={worksites}
-          onAdd={handleAddWorksite}
-          onDelete={handleDeleteWorksite}
-          onRename={handleRenameWorksite}
-          onToggleVisibility={handleToggleWorksiteVisibility}
-          onToggleAllVisibility={handleToggleAllWorksites}
-          currentDate={currentDate}
-          worksiteVisibility={worksiteVisibility[dateKey] || {}}
-          allocationsForDate={currentAllocations}
-          resources={resources}
-          onClose={() => setShowWorksiteSettings(false)}
-        />
-      )}
+      {
+        showWorksiteSettings && (
+          <WorksiteSettings
+            worksites={worksites}
+            onAdd={handleAddWorksite}
+            onDelete={handleDeleteWorksite}
+            onRename={handleRenameWorksite}
+            onToggleVisibility={handleToggleWorksiteVisibility}
+            onToggleAllVisibility={handleToggleAllWorksites}
+            currentDate={currentDate}
+            worksiteVisibility={worksiteVisibility[dateKey] || {}}
+            allocationsForDate={currentAllocations}
+            resources={resources}
+            onClose={() => setShowWorksiteSettings(false)}
+          />
+        )
+      }
 
-      {showResourceSettings && (
-        <ResourceSettings
-          resources={resources}
-          onAdd={handleAddResource}
-          onUpdate={handleUpdateResource}
-          onDelete={handleDeleteResource}
-          onBulkImport={handleBulkImport}
-          onClose={() => setShowResourceSettings(false)}
-        />
-      )}
+      {
+        showResourceSettings && (
+          <ResourceSettings
+            resources={resources}
+            onAdd={handleAddResource}
+            onUpdate={handleUpdateResource}
+            onDelete={handleDeleteResource}
+            onBulkImport={handleBulkImport}
+            onClose={() => setShowResourceSettings(false)}
+          />
+        )
+      }
 
-      {showOvertimeModal && overtimeResourceId && (
-        <OvertimeModal
-          resource={resources.find(r => r.id === overtimeResourceId)!}
-          currentOvertime={overtime[dateKey]?.[overtimeResourceId]}
-          onSave={(entry) => {
-            setOvertime(prev => ({
-              ...prev,
-              [dateKey]: {
-                ...(prev[dateKey] || {}),
-                [overtimeResourceId]: entry
-              }
-            }));
-            setShowOvertimeModal(false);
-          }}
-          onDelete={() => {
-            setOvertime(prev => {
-              const newOvertime = { ...prev };
-              if (newOvertime[dateKey]) {
-                delete newOvertime[dateKey][overtimeResourceId];
-              }
-              return newOvertime;
-            });
-            setShowOvertimeModal(false);
-          }}
-          onClose={() => setShowOvertimeModal(false)}
-        />
-      )}
+      {
+        showOvertimeModal && overtimeResourceId && (
+          <OvertimeModal
+            resource={resources.find(r => r.id === overtimeResourceId)!}
+            currentOvertime={overtime[dateKey]?.[overtimeResourceId]}
+            onSave={(entry) => {
+              setOvertime(prev => ({
+                ...prev,
+                [dateKey]: {
+                  ...(prev[dateKey] || {}),
+                  [overtimeResourceId]: entry
+                }
+              }));
+              setShowOvertimeModal(false);
+            }}
+            onDelete={() => {
+              setOvertime(prev => {
+                const newOvertime = { ...prev };
+                if (newOvertime[dateKey]) {
+                  delete newOvertime[dateKey][overtimeResourceId];
+                }
+                return newOvertime;
+              });
+              setShowOvertimeModal(false);
+            }}
+            onClose={() => setShowOvertimeModal(false)}
+          />
+        )
+      }
 
-      {showHourSplitModal && hourSplitResourceId && (
-        <HourSplitModal
-          resource={resources.find(r => r.id === hourSplitResourceId)!}
-          currentDate={currentDate}
-          currentHours={partialAllocations[dateKey]?.[hourSplitResourceId]?.[0]?.hours}
-          onSave={handleSaveHourSplit}
-          onDelete={handleDeleteHourSplit}
-          onClose={() => setShowHourSplitModal(false)}
-        />
-      )}
-    </div>
+      {
+        showHourSplitModal && hourSplitResourceId && (
+          <HourSplitModal
+            resource={resources.find(r => r.id === hourSplitResourceId)!}
+            currentDate={currentDate}
+            currentHours={partialAllocations[dateKey]?.[hourSplitResourceId]?.[0]?.hours}
+            onSave={handleSaveHourSplit}
+            onDelete={handleDeleteHourSplit}
+            onClose={() => setShowHourSplitModal(false)}
+          />
+        )
+      }
+    </div >
   );
 }
 
