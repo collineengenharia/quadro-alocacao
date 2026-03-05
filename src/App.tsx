@@ -89,7 +89,7 @@ const ResourceCard = ({ resource, onDragStart, onDragEnd, onClick, isSelected, o
         e.stopPropagation();
         if (!inMaintenance) onClick?.();
       }}
-      className={`resource - card animate - scale -in ${isSelected ? 'ring-2 ring-blue-500 ring-offset-2' : ''} ${inMaintenance ? 'in-maintenance' : ''} `}
+      className={`resource-card animate-scale-in ${isSelected ? 'ring-2 ring-blue-500 ring-offset-2' : ''} ${inMaintenance ? 'in-maintenance' : ''}`}
       style={{
         cursor: isDraggable ? 'grab' : 'not-allowed',
         position: 'relative',
@@ -236,7 +236,7 @@ const ResourceCard = ({ resource, onDragStart, onDragEnd, onClick, isSelected, o
       <img
         src={resource.photo}
         alt={resource.name}
-        className={`resource - card - photo ${resource.type} `}
+        className={`resource-card-photo ${resource.type}`}
       />
       <div className="resource-card-name">{resource.name}</div>
       <div className="resource-card-role">{resource.role}</div>
