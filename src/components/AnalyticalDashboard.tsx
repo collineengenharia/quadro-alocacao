@@ -57,6 +57,12 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 }) => {
     const [viewMode, setViewMode] = useState<'daily' | 'monthly'>('monthly');
 
+    const getMaxHoursForDate = (date: Date): number => {
+        const dayOfWeek = date.getDay(); // 0 = Domingo, 5 = Sexta
+        if (dayOfWeek === 0 || dayOfWeek === 6) return 0;
+        return dayOfWeek === 5 ? 8 : 9;
+    };
+
     const stats = useMemo(() => {
         const start = viewMode === 'monthly' ? startOfMonth(selectedMonth) : selectedMonth;
         const end = viewMode === 'monthly' ? endOfMonth(selectedMonth) : selectedMonth;
@@ -275,9 +281,10 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                 }
 
                 if (partials.length > 0) {
+                    const maxHours = getMaxHoursForDate(day);
                     partials.forEach(p => {
                         if (p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva') {
-                            const hoursFraction = p.hours / 8;
+                            const hoursFraction = maxHours > 0 ? p.hours / maxHours : 0;
                             const cost = resource.costPerDay * hoursFraction;
 
                             dailyTotal += cost;
@@ -290,7 +297,8 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
                             allocatedToSite = true;
                         } else if (p.worksiteId === 'chuva') {
-                            totalRainCost += resource.costPerDay * (p.hours / 8);
+                            const maxHours = getMaxHoursForDate(day);
+                            totalRainCost += resource.costPerDay * (maxHours > 0 ? p.hours / maxHours : 0);
                         }
                     });
                 }
@@ -313,7 +321,8 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
                 const ot = overtime[dateKey]?.[resource.id];
                 if (ot && allocatedToSite) {
-                    const hourlyRate = resource.costPerDay / 8;
+                    const maxHours = getMaxHoursForDate(day);
+                    const hourlyRate = maxHours > 0 ? resource.costPerDay / maxHours : resource.costPerDay / 8;
                     const otCost = ot.hours * hourlyRate * ot.multiplier;
                     dailyTotal += otCost;
 
