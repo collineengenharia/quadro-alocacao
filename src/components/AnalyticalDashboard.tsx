@@ -142,7 +142,11 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                 if (!hasCancelingAlloc) {
                     for (const d of intermediatePartials) {
                         const parts = partialAllocations[d]?.[res.id] || [];
-                        if (parts.some(p => p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva')) {
+                        if (parts.some(p => {
+                            const ws = worksites.find(w => w.id === p.worksiteId);
+                            const isRain = p.worksiteId === 'chuva' || ws?.name.toUpperCase() === 'CHUVA';
+                            return p.worksiteId !== 'pateo' && !isRain;
+                        })) {
                             hasCancelingAlloc = true;
                             break;
                         }
@@ -224,8 +228,12 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                     delete currentMaintState[resource.id];
                 } else {
                     // Se não houve entrada manual HOJE, verifica se alocação REAL cancela o estado anterior
-                    const hasRealAlloc = (explicitAlloc && explicitAlloc !== 'pateo' && explicitAlloc !== 'chuva') ||
-                        explicitPartials.some(p => p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva');
+                    const hasRealAlloc = (explicitAlloc && explicitAlloc !== 'pateo' && explicitAlloc !== 'chuva' && worksites.some(w => w.id === explicitAlloc && w.name.toUpperCase() !== 'CHUVA')) ||
+                        explicitPartials.some(p => {
+                            const ws = worksites.find(w => w.id === p.worksiteId);
+                            const isRain = p.worksiteId === 'chuva' || ws?.name.toUpperCase() === 'CHUVA';
+                            return p.worksiteId !== 'pateo' && !isRain;
+                        });
 
                     if (hasRealAlloc) {
                         delete currentMaintState[resource.id];
@@ -267,7 +275,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
                 let allocatedToSite = false;
 
-                // OCIOSIDADE (PÁTIO):
+                // OCIOSIDADE (PÁTIO) INTEGRAL:
                 const isIdle = !isWeekend(day) && isFinal && (allocation === 'pateo' || !allocation) && partials.length === 0;
 
                 if (isIdle) {
@@ -286,20 +294,22 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         const hoursFraction = maxHours > 0 ? p.hours / maxHours : 0;
                         const cost = resource.costPerDay * hoursFraction;
 
-                        if (p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva') {
+                        const ws = worksites.find(w => w.id === p.worksiteId);
+                        const isRain = p.worksiteId === 'chuva' || ws?.name.toUpperCase() === 'CHUVA';
+
+                        if (p.worksiteId !== 'pateo' && !isRain && ws) {
                             dailyTotal += cost;
 
                             if (!worksiteCosts[p.worksiteId]) worksiteCosts[p.worksiteId] = 0;
                             worksiteCosts[p.worksiteId] += cost;
 
-                            const wsName = worksites.find(w => w.id === p.worksiteId)?.name;
-                            if (wsName) dailyWorksiteCosts[wsName] = (dailyWorksiteCosts[wsName] || 0) + cost;
+                            dailyWorksiteCosts[ws.name] = (dailyWorksiteCosts[ws.name] || 0) + cost;
 
                             allocatedToSite = true;
-                        } else if (p.worksiteId === 'chuva') {
+                        } else if (isRain) {
                             totalRainCost += cost;
-                        } else if (p.worksiteId === 'pateo') {
-                            // Se for parcial no pátio, conta como custo de ociosidade
+                        } else {
+                            // Se for pátio OU obra não encontrada (desconhecida), conta como ociosidade
                             totalYardCost += cost;
                             worksiteCosts['pateo'] += cost;
                             dailyWorksiteCosts['Pátio'] += cost;
@@ -308,20 +318,29 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                     });
                 }
 
-                if (partials.length === 0 && allocation && allocation !== 'pateo' && allocation !== 'chuva') {
-                    dailyTotal += resource.costPerDay;
+                if (partials.length === 0 && allocation) {
+                    const ws = worksites.find(w => w.id === allocation);
+                    const isRain = allocation === 'chuva' || ws?.name.toUpperCase() === 'CHUVA';
 
-                    if (!worksiteCosts[allocation]) worksiteCosts[allocation] = 0;
-                    worksiteCosts[allocation] += resource.costPerDay;
+                    if (allocation !== 'pateo' && !isRain && ws) {
+                        dailyTotal += resource.costPerDay;
 
-                    const wsName = worksites.find(w => w.id === allocation)?.name;
-                    if (wsName) dailyWorksiteCosts[wsName] = (dailyWorksiteCosts[wsName] || 0) + resource.costPerDay;
+                        if (!worksiteCosts[allocation]) worksiteCosts[allocation] = 0;
+                        worksiteCosts[allocation] += resource.costPerDay;
 
-                    allocatedToSite = true;
-                }
+                        dailyWorksiteCosts[ws.name] = (dailyWorksiteCosts[ws.name] || 0) + resource.costPerDay;
 
-                if (partials.length === 0 && allocation === 'chuva') {
-                    totalRainCost += resource.costPerDay;
+                        allocatedToSite = true;
+                    } else if (isRain) {
+                        totalRainCost += resource.costPerDay;
+                    } else if (allocation === 'pateo' || (allocation && !ws)) {
+                        // Se for pátio explicitamente OU obra que foi deletada (!ws)
+                        const cost = resource.costPerDay;
+                        totalYardCost += cost;
+                        worksiteCosts['pateo'] += cost;
+                        dailyWorksiteCosts['Pátio'] += cost;
+                        dailyTotal += cost;
+                    }
                 }
 
                 const ot = overtime[dateKey]?.[resource.id];
@@ -331,17 +350,27 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                     const otCost = ot.hours * hourlyRate * ot.multiplier;
                     dailyTotal += otCost;
 
-                    if (allocation && allocation !== 'pateo' && allocation !== 'chuva') {
+                    const currentWs = worksites.find(w => w.id === allocation);
+                    const isRain = allocation === 'chuva' || currentWs?.name.toUpperCase() === 'CHUVA';
+
+                    if (allocation && allocation !== 'pateo' && !isRain && currentWs) {
+                        if (!worksiteCosts[allocation]) worksiteCosts[allocation] = 0;
                         worksiteCosts[allocation] += otCost;
-                        const wsName = worksites.find(w => w.id === allocation)?.name;
-                        if (wsName) dailyWorksiteCosts[wsName] += otCost;
+                        dailyWorksiteCosts[currentWs.name] += otCost;
 
                     } else if (partials.length > 0) {
-                        const w = partials.find(p => p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva');
-                        if (w) {
-                            worksiteCosts[w.worksiteId] += otCost;
-                            const wsName = worksites.find(ws => ws.id === w.worksiteId)?.name;
-                            if (wsName) dailyWorksiteCosts[wsName] += otCost;
+                        const p = partials.find(p => {
+                            const ws = worksites.find(w => w.id === p.worksiteId);
+                            const isRain = p.worksiteId === 'chuva' || ws?.name.toUpperCase() === 'CHUVA';
+                            return p.worksiteId !== 'pateo' && !isRain;
+                        });
+                        if (p) {
+                            const ws = worksites.find(w => w.id === p.worksiteId);
+                            if (ws) {
+                                if (!worksiteCosts[p.worksiteId]) worksiteCosts[p.worksiteId] = 0;
+                                worksiteCosts[p.worksiteId] += otCost;
+                                dailyWorksiteCosts[ws.name] += otCost;
+                            }
                         }
                     }
                 }
@@ -366,17 +395,21 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
         });
 
         // 3. Ranking e Gráficos (Incluindo Pátio)
-        const pieData = Object.entries(worksiteCosts).map(([id, value], index) => {
+        const pieData = Object.entries(worksiteCosts).map(([id, value]) => {
             if (id === 'pateo') return { name: 'Pátio (Ociosidade)', value, color: '#94a3b8' };
             const ws = worksites.find(w => w.id === id);
             return {
                 name: ws ? ws.name : 'Desconhecido',
                 value,
-                color: ['#0ea5e9', '#22c55e', '#eab308', '#f97316', '#ef4444', '#8b5cf6'][index % 6]
+                color: '#0ea5e9' // Vai ser sobrescrito pelo rankingData abaixo
             };
-        }).filter(d => d.value > 0);
+        }).filter(d => d.value > 0 && d.name !== 'Desconhecido');
 
-        const rankingData = pieData.sort((a, b) => b.value - a.value);
+        const rankingColors = ['#0ea5e9', '#22c55e', '#eab308', '#f97316', '#ef4444', '#8b5cf6'];
+        const rankingData = pieData.sort((a, b) => b.value - a.value).map((item, index) => ({
+            ...item,
+            color: rankingColors[index % rankingColors.length]
+        }));
 
         // 4. Preparar Lista Final de Intervalos de Manutenção para Display
         const maintenanceIntervals: { resourceId: string; start: string; end: string; days: number; reason: string; cost: number }[] = [];
