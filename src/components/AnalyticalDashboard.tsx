@@ -283,10 +283,10 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                 if (partials.length > 0) {
                     const maxHours = getMaxHoursForDate(day);
                     partials.forEach(p => {
-                        if (p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva') {
-                            const hoursFraction = maxHours > 0 ? p.hours / maxHours : 0;
-                            const cost = resource.costPerDay * hoursFraction;
+                        const hoursFraction = maxHours > 0 ? p.hours / maxHours : 0;
+                        const cost = resource.costPerDay * hoursFraction;
 
+                        if (p.worksiteId !== 'pateo' && p.worksiteId !== 'chuva') {
                             dailyTotal += cost;
 
                             if (!worksiteCosts[p.worksiteId]) worksiteCosts[p.worksiteId] = 0;
@@ -297,8 +297,13 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
                             allocatedToSite = true;
                         } else if (p.worksiteId === 'chuva') {
-                            const maxHours = getMaxHoursForDate(day);
-                            totalRainCost += resource.costPerDay * (maxHours > 0 ? p.hours / maxHours : 0);
+                            totalRainCost += cost;
+                        } else if (p.worksiteId === 'pateo') {
+                            // Se for parcial no pátio, conta como custo de ociosidade
+                            totalYardCost += cost;
+                            worksiteCosts['pateo'] += cost;
+                            dailyWorksiteCosts['Pátio'] += cost;
+                            dailyTotal += cost;
                         }
                     });
                 }

@@ -676,17 +676,7 @@ function App() {
 
     if (isCurrentlyVisible) {
       // Tentando ocultar - verificar se tem recursos alocados
-      const allocatedResources = resources.filter(res => {
-        // 1. Verificar se o recurso tem alocações parciais HOJE
-        const partials = partialAllocations[dateKey]?.[res.id];
-        if (partials && partials.length > 0) {
-          // Se tiver parciais, ele está na obra se algum dos cards parciais estiver nela
-          return partials.some(p => p.worksiteId === id);
-        }
-
-        // 2. Se não tiver parciais, verificar alocação principal (padrão)
-        return currentAllocations[res.id] === id;
-      });
+      const allocatedResources = resources.filter(res => currentAllocations[res.id] === id);
 
       if (allocatedResources.length > 0) {
         const resourceNames = allocatedResources.map(r => r.name).join(', ');
@@ -898,6 +888,15 @@ function App() {
       [dateKey]: {
         ...(prev[dateKey] || {}),
         [hourSplitResourceId]: newPartials
+      }
+    }));
+
+    // NOVIDADE: Mover a alocação base para o PÁTEO para liberar a obra anterior
+    setAllocations(prev => ({
+      ...prev,
+      [dateKey]: {
+        ...(prev[dateKey] || {}),
+        [hourSplitResourceId]: 'pateo'
       }
     }));
 
