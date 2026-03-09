@@ -979,12 +979,27 @@ function App() {
 
         // 2. Fallback para alocação padrão
         const allocatedSite = currentAllocations[res.id] || 'pateo';
-        // Se siteId é pateo, e não tem alocação (allocatedSite é pateo), então deve aparecer
-        // Se siteId é obra-X, e allocatedSite é obra-X, deve aparecer
-        if (allocatedSite === siteId) {
+
+        // --- LÓGICA DE RESGATE DE CARDS ÓRFÃOS ---
+        // Se a obra onde o recurso está alocado não existe mais na lista oficial de worksites
+        // (e ele não está no pátio), tratamos ele como órfão.
+        const siteExists = worksites.some(ws => ws.id === allocatedSite);
+        const isOrphan = allocatedSite !== 'pateo' && !siteExists;
+
+        // Se siteId é pateo, e (não tem alocação ou a obra sumiu), então ele aparece aqui
+        if (siteId === 'pateo' && (allocatedSite === 'pateo' || isOrphan)) {
           return [{
             resource: res,
-            allocatedHours: undefined, // Full day
+            allocatedHours: undefined,
+            key: res.id
+          }];
+        }
+
+        // Se siteId é uma obra-X, e allocatedSite é obra-X, deve aparecer apenas se a obra existir
+        if (allocatedSite === siteId && siteExists) {
+          return [{
+            resource: res,
+            allocatedHours: undefined,
             key: res.id
           }];
         }

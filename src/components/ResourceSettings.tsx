@@ -177,8 +177,8 @@ export const ResourceSettings: React.FC<ResourceSettingsProps> = ({
                   <div className="field">
                     <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Foto de Perfil</label>
                     <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-full bg-gray-200 overflow-hidden border-2 border-white shadow-md">
-                        {photo ? <img src={photo} alt="Preview" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-xl">📸</div>}
+                      <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: '#e2e8f0', overflow: 'hidden', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                        {photo ? <img src={photo} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>📸</div>}
                       </div>
                       <label style={{ flex: 1, height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: '12px', cursor: 'pointer', fontSize: '13px', fontWeight: '700' }}>
                         <Upload size={16} /> Carregar
@@ -256,7 +256,19 @@ export const ResourceSettings: React.FC<ResourceSettingsProps> = ({
               <div style={{ maxHeight: '350px', overflowY: 'auto', paddingRight: '4px' }}>
                 {filteredResources.map((res) => (
                   <div key={res.id} className="list-item" style={{ padding: '12px' }}>
-                    <img src={res.photo} className={`w-12 h-12 rounded-full object-cover border-2 ${res.type === 'employee' ? 'border-blue-100' : 'border-amber-100'}`} alt={res.name} />
+                    <img
+                      src={res.photo}
+                      style={{
+                        width: '50px',
+                        height: '50px',
+                        borderRadius: '50%',
+                        objectFit: 'cover',
+                        border: '2px solid',
+                        borderColor: res.type === 'employee' ? '#dbeafe' : '#fef3c7',
+                        flexShrink: 0
+                      }}
+                      alt={res.name}
+                    />
                     <div style={{ flex: 1 }}>
                       <p style={{ fontWeight: 800, margin: 0, fontSize: '14px', color: '#1e293b' }}>
                         {res.name}
