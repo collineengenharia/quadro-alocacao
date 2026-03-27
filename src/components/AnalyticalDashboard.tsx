@@ -304,7 +304,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                 const isIdle = !isWeekend(day) && isFinal && (allocation === 'pateo' || !allocation) && partials.length === 0;
 
                 if (isIdle) {
-                    const idleCost = resource.costPerDay;
+                    const idleCost = resource.type === 'machine' ? 0 : resource.costPerDay;
                     totalYardCost += idleCost;
                     worksiteCosts['pateo'] += idleCost;
                     dailyWorksiteCosts['Pátio'] += idleCost;
@@ -336,10 +336,11 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                             dailyWorksiteCosts['Chuva'] += cost;
                         } else {
                             // Se for pátio OU obra não encontrada (desconhecida), conta como ociosidade
-                            totalYardCost += cost;
-                            worksiteCosts['pateo'] += cost;
-                            dailyWorksiteCosts['Pátio'] += cost;
-                            dailyTotal += cost;
+                            const yardCost = resource.type === 'machine' ? 0 : cost;
+                            totalYardCost += yardCost;
+                            worksiteCosts['pateo'] += yardCost;
+                            dailyWorksiteCosts['Pátio'] += yardCost;
+                            dailyTotal += yardCost;
                         }
                     });
                 }
@@ -362,7 +363,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         dailyWorksiteCosts['Chuva'] += resource.costPerDay;
                     } else if (allocation === 'pateo' || (allocation && !ws)) {
                         // Se for pátio explicitamente OU obra que foi deletada (!ws)
-                        const cost = resource.costPerDay;
+                        const cost = resource.type === 'machine' ? 0 : resource.costPerDay;
                         totalYardCost += cost;
                         worksiteCosts['pateo'] += cost;
                         dailyWorksiteCosts['Pátio'] += cost;
@@ -412,7 +413,6 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                 date: format(day, 'dd/MM'),
                 ...dailyWorksiteCosts
             });
-
             totalCost += dailyTotal;
             if (isFinal) {
                 totalRealCost += dailyTotal;
@@ -422,23 +422,46 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
         });
 
         // 3. Ranking e Gráficos (Incluindo Pátio)
-        const pieData = Object.entries(worksiteCosts).map(([id, value]) => {
+        const extendedColors = [
+            '#0ea5e9', '#22c55e', '#eab308', '#f97316', '#ef4444', '#8b5cf6',
+            '#ec4899', '#14b8a6', '#f59e0b', '#6366f1', '#10b981', '#f43f5e',
+            '#06b6d4', '#84cc16', '#d946ef', '#3b82f6', '#10b981', '#f97316',
+            '#64748b', '#0369a1', '#15803d', '#b45309', '#be123c', '#7e22ce'
+        ];
+
+        const pieData = Object.entries(worksiteCosts).map(([id, value], index) => {
             if (id === 'pateo') return { name: 'Pátio (Ociosidade)', value, color: '#94a3b8' };
             const ws = worksites.find(w => w.id === id);
             return {
                 name: ws ? ws.name : 'Desconhecido',
                 value,
-                color: '#0ea5e9' // Vai ser sobrescrito pelo rankingData abaixo
+                color: extendedColors[index % extendedColors.length]
             };
-        }).filter(d => d.value > 0 && d.name !== 'Desconhecido');
+        }).filter(d => d.value > 0);
 
-        const rankingColors = ['#0ea5e9', '#22c55e', '#eab308', '#f97316', '#ef4444', '#8b5cf6'];
-        const rankingData = pieData.sort((a, b) => b.value - a.value).map((item, index) => ({
-            ...item,
-            color: rankingColors[index % rankingColors.length]
-        }));
+        const rankingData = pieData.sort((a, b) => b.value - a.value);
 
-        // 4. Preparar Lista Final de Intervalos de Manutenção para Display
+        // --- DADOS ACUMULADOS PARA O NOVO GRÁFICO (Evolução Acumulada) ---
+        const worksiteCumulativeData: { date: string;[worksiteName: string]: any }[] = [];
+        const cumulativeCosts: { [key: string]: number } = {};
+        
+        // Inicializa zerado
+        worksites.forEach(w => cumulativeCosts[w.name] = 0);
+        cumulativeCosts['Pátio'] = 0;
+        cumulativeCosts['Chuva'] = 0;
+
+        worksiteDailyData.forEach(dailyRow => {
+            // Soma o diário no acumulado
+            Object.keys(dailyRow).forEach(key => {
+                if (key !== 'date') {
+                    cumulativeCosts[key] = (cumulativeCosts[key] || 0) + (dailyRow[key] as number);
+                }
+            });
+            worksiteCumulativeData.push({
+                date: dailyRow.date,
+                ...cumulativeCosts
+            });
+        });
         const maintenanceIntervals: { resourceId: string; start: string; end: string; days: number; reason: string; cost: number }[] = [];
 
         // Para cada recurso que teve manutenção, verifica se ainda está ativo no fim do período
@@ -517,6 +540,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
             monthlyData,
             rankingData,
             worksiteDailyData,
+            worksiteCumulativeData,
             idleResources: idleResources.sort((a, b) => b.days - a.days).slice(0, 20),
             maintenanceIntervals: maintenanceIntervals.sort((a, b) => b.start.localeCompare(a.start))
         };
@@ -760,7 +784,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                 {/* Gráfico Pizza */}
                 <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
                     <h3 style={{ fontSize: '16px', fontWeight: '900', color: '#1e293b', marginBottom: '16px' }}>Distribuição Percentual</h3>
-                    <div style={{ height: '220px' }}>
+                    <div style={{ height: '400px' }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
                                 <Pie data={stats.pieData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
@@ -778,7 +802,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
             {viewMode !== 'daily' && (
                 <div style={{ background: 'white', padding: '28px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '400px', marginBottom: '32px' }}>
                     <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '24px' }}>Evolução de Custos por Obra</h3>
-                    <div style={{ height: '300px' }}>
+                    <div style={{ height: '400px' }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <LineChart data={stats.worksiteDailyData}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -788,16 +812,59 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                 <Legend />
                                 {worksites
                                     .filter(w => stats.rankingData.some(r => r.name === w.name))
-                                    .map((w, idx) => (
-                                        <Line
-                                            key={w.id}
-                                            type="monotone"
-                                            dataKey={w.name}
-                                            stroke={['#0ea5e9', '#22c55e', '#eab308', '#f97316', '#ef4444', '#8b5cf6'][idx % 6]}
-                                            strokeWidth={3}
-                                            dot={false}
-                                        />
-                                    ))}
+                                    .map((w, idx) => {
+                                        const color = stats.rankingData.find(r => r.name === w.name)?.color || '#94a3b8';
+                                        return (
+                                            <Line
+                                                key={w.id}
+                                                type="monotone"
+                                                dataKey={w.name}
+                                                stroke={color}
+                                                strokeWidth={3}
+                                                dot={false}
+                                            />
+                                        );
+                                    })}
+
+                                {/* Linha do Pátio Opcional */}
+                                {stats.rankingData.some(r => r.name === 'Pátio (Ociosidade)') && (
+                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                                )}
+                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={2} strokeDasharray="3 3" dot={false} name="Chuva" />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+            )}
+
+            {/* Novo Gráfico: Evolução de Custos Acumulados */}
+            {viewMode !== 'daily' && (
+                <div style={{ background: 'white', padding: '28px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '400px', marginBottom: '32px' }}>
+                    <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '8px' }}>Evolução de Custos Acumulados por Obra</h3>
+                    <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '24px' }}>Mostra o crescimento do custo somado a cada dia do período selecionado.</p>
+                    <div style={{ height: '400px' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={stats.worksiteCumulativeData}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} dy={10} />
+                                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
+                                <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} />
+                                <Legend />
+                                {worksites
+                                    .filter(w => stats.rankingData.some(r => r.name === w.name))
+                                    .map((w, idx) => {
+                                        const color = stats.rankingData.find(r => r.name === w.name)?.color || '#94a3b8';
+                                        return (
+                                            <Line
+                                                key={`cumul-${w.id}`}
+                                                type="monotone"
+                                                dataKey={w.name}
+                                                stroke={color}
+                                                strokeWidth={3}
+                                                dot={false}
+                                            />
+                                        );
+                                    })}
                                 {/* Linha do Pátio Opcional */}
                                 {stats.rankingData.some(r => r.name === 'Pátio (Ociosidade)') && (
                                     <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} />
