@@ -55,7 +55,9 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
     onMonthChange,
     allocationMetadata
 }) => {
-    const [viewMode, setViewMode] = useState<'daily' | 'monthly' | '3months' | '6months' | '1year'>('monthly');
+    const [viewMode, setViewMode] = useState<'daily' | 'monthly' | '3months' | '6months' | '1year' | 'custom'>('monthly');
+    const [customStart, setCustomStart] = useState<string>(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+    const [customEnd, setCustomEnd] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
 
     const getMaxHoursForDate = (date: Date): number => {
         const dayOfWeek = date.getDay(); // 0 = Domingo, 5 = Sexta
@@ -79,6 +81,13 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
         } else if (viewMode === '1year') {
             start = startOfMonth(addMonths(selectedMonth, -11));
             end = endOfMonth(selectedMonth);
+        } else if (viewMode === 'custom') {
+            try {
+                const cs = parseISO(customStart);
+                const ce = parseISO(customEnd);
+                start = cs;
+                end = ce > cs ? ce : cs;
+            } catch { /* usa padrão */ }
         }
 
         const days = eachDayOfInterval({ start, end });
@@ -219,6 +228,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
             const dailyWorksiteCosts: { [key: string]: number } = {};
             worksites.forEach(w => dailyWorksiteCosts[w.name] = 0);
             dailyWorksiteCosts['Pátio'] = 0;
+            dailyWorksiteCosts['Chuva'] = 0;
 
             resources.forEach(resource => {
                 if (resource.ignoreCost) return;
@@ -323,6 +333,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                             allocatedToSite = true;
                         } else if (isRain) {
                             totalRainCost += cost;
+                            dailyWorksiteCosts['Chuva'] += cost;
                         } else {
                             // Se for pátio OU obra não encontrada (desconhecida), conta como ociosidade
                             totalYardCost += cost;
@@ -348,6 +359,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         allocatedToSite = true;
                     } else if (isRain) {
                         totalRainCost += resource.costPerDay;
+                        dailyWorksiteCosts['Chuva'] += resource.costPerDay;
                     } else if (allocation === 'pateo' || (allocation && !ws)) {
                         // Se for pátio explicitamente OU obra que foi deletada (!ws)
                         const cost = resource.costPerDay;
@@ -589,8 +601,58 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         >
                             1 Ano
                         </button>
+                        <button
+                            onClick={() => setViewMode('custom')}
+                            style={{
+                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                background: viewMode === 'custom' ? '#f3e8ff' : 'transparent',
+                                color: viewMode === 'custom' ? '#7c3aed' : '#64748b',
+                                fontSize: '12px'
+                            }}
+                        >
+                            📅 Personalizado
+                        </button>
                     </div>
 
+                    {/* Painel de datas personalizadas */}
+                    {viewMode === 'custom' && (
+                        <div style={{
+                            display: 'flex', gap: '8px', alignItems: 'center',
+                            background: 'white', padding: '8px 12px', borderRadius: '12px',
+                            border: '2px solid #7c3aed', boxShadow: '0 2px 8px rgba(124,58,237,0.15)'
+                        }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                <label style={{ fontSize: '9px', fontWeight: '800', color: '#7c3aed', textTransform: 'uppercase' }}>De</label>
+                                <input
+                                    type="date"
+                                    value={customStart}
+                                    onChange={e => setCustomStart(e.target.value)}
+                                    style={{
+                                        border: '1px solid #e2e8f0', borderRadius: '8px',
+                                        padding: '4px 8px', fontSize: '12px', fontWeight: '700',
+                                        color: '#1e293b', outline: 'none', cursor: 'pointer'
+                                    }}
+                                />
+                            </div>
+                            <div style={{ color: '#94a3b8', fontWeight: '800', fontSize: '14px', marginTop: '10px' }}>→</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                <label style={{ fontSize: '9px', fontWeight: '800', color: '#7c3aed', textTransform: 'uppercase' }}>Até</label>
+                                <input
+                                    type="date"
+                                    value={customEnd}
+                                    onChange={e => setCustomEnd(e.target.value)}
+                                    style={{
+                                        border: '1px solid #e2e8f0', borderRadius: '8px',
+                                        padding: '4px 8px', fontSize: '12px', fontWeight: '700',
+                                        color: '#1e293b', outline: 'none', cursor: 'pointer'
+                                    }}
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Navegação por setas (oculta em modo personalizado) */}
+                    {viewMode !== 'custom' && (
                     <div style={{ display: 'flex', gap: '12px', background: 'white', padding: '6px', borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
                         <button onClick={() => handleNavigation('prev')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronLeft size={20} /></button>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 16px', fontWeight: '800', color: '#1e293b' }}>
@@ -604,6 +666,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         </div>
                         <button onClick={() => handleNavigation('next')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronRight size={20} /></button>
                     </div>
+                    )}
                 </div>
             </div>
 
@@ -739,6 +802,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                 {stats.rankingData.some(r => r.name === 'Pátio (Ociosidade)') && (
                                     <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} />
                                 )}
+                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={2} strokeDasharray="3 3" dot={false} name="Chuva" />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
