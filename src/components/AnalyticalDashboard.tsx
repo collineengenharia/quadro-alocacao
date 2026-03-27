@@ -790,7 +790,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                 <Pie data={stats.pieData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
                                     {stats.pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                                 </Pie>
-                                <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} />
+                                <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} itemSorter={(item) => -(Number(item.value) || 0)} />
                                 <Legend verticalAlign="middle" align="right" layout="vertical" iconType="circle" />
                             </PieChart>
                         </ResponsiveContainer>
@@ -808,7 +808,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                 <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} dy={10} />
                                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
-                                <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} />
+                                <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} itemSorter={(item) => -(Number(item.value) || 0)} />
                                 <Legend />
                                 {worksites
                                     .filter(w => stats.rankingData.some(r => r.name === w.name))
@@ -848,7 +848,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                 <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} dy={10} />
                                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
-                                <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} />
+                                <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} itemSorter={(item) => -(Number(item.value) || 0)} />
                                 <Legend />
                                 {worksites
                                     .filter(w => stats.rankingData.some(r => r.name === w.name))
