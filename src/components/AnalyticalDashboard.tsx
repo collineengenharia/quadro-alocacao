@@ -55,7 +55,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
     onMonthChange,
     allocationMetadata
 }) => {
-    const [viewMode, setViewMode] = useState<'daily' | 'monthly'>('monthly');
+    const [viewMode, setViewMode] = useState<'daily' | 'monthly' | '3months' | '6months' | '1year'>('monthly');
 
     const getMaxHoursForDate = (date: Date): number => {
         const dayOfWeek = date.getDay(); // 0 = Domingo, 5 = Sexta
@@ -64,8 +64,23 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
     };
 
     const stats = useMemo(() => {
-        const start = viewMode === 'monthly' ? startOfMonth(selectedMonth) : selectedMonth;
-        const end = viewMode === 'monthly' ? endOfMonth(selectedMonth) : selectedMonth;
+        let start = startOfMonth(selectedMonth);
+        let end = endOfMonth(selectedMonth);
+
+        if (viewMode === 'daily') {
+            start = selectedMonth;
+            end = selectedMonth;
+        } else if (viewMode === '3months') {
+            start = startOfMonth(addMonths(selectedMonth, -2));
+            end = endOfMonth(selectedMonth);
+        } else if (viewMode === '6months') {
+            start = startOfMonth(addMonths(selectedMonth, -5));
+            end = endOfMonth(selectedMonth);
+        } else if (viewMode === '1year') {
+            start = startOfMonth(addMonths(selectedMonth, -11));
+            end = endOfMonth(selectedMonth);
+        }
+
         const days = eachDayOfInterval({ start, end });
 
         let totalCost = 0;
@@ -497,10 +512,11 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
     }, [resources, allocations, overtime, maintenanceHistory, partialAllocations, fuelData, fuelQuotes, worksites, selectedMonth, viewMode, allocationMetadata]);
 
     const handleNavigation = (direction: 'prev' | 'next') => {
-        if (viewMode === 'monthly') {
-            onMonthChange(direction === 'prev' ? startOfMonth(addMonths(selectedMonth, -1)) : startOfMonth(addMonths(selectedMonth, 1)));
-        } else {
+        if (viewMode === 'daily') {
             onMonthChange(direction === 'prev' ? subDays(selectedMonth, 1) : addDays(selectedMonth, 1));
+        } else {
+            // Para mensal, 3m, 6m e 1ano, navegamos mês a mês
+            onMonthChange(direction === 'prev' ? startOfMonth(addMonths(selectedMonth, -1)) : startOfMonth(addMonths(selectedMonth, 1)));
         }
     };
 
@@ -519,24 +535,59 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                     {/* Toggle Display Mode */}
                     <div style={{ background: 'white', padding: '4px', borderRadius: '12px', display: 'flex', gap: '4px', border: '1px solid #e2e8f0' }}>
                         <button
+                            onClick={() => setViewMode('daily')}
+                            style={{
+                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                background: viewMode === 'daily' ? '#e0f2fe' : 'transparent',
+                                color: viewMode === 'daily' ? '#0284c7' : '#64748b',
+                                fontSize: '12px'
+                            }}
+                        >
+                            Diário
+                        </button>
+                        <button
                             onClick={() => setViewMode('monthly')}
                             style={{
-                                padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
                                 background: viewMode === 'monthly' ? '#e0f2fe' : 'transparent',
-                                color: viewMode === 'monthly' ? '#0284c7' : '#64748b'
+                                color: viewMode === 'monthly' ? '#0284c7' : '#64748b',
+                                fontSize: '12px'
                             }}
                         >
                             Mensal
                         </button>
                         <button
-                            onClick={() => setViewMode('daily')}
+                            onClick={() => setViewMode('3months')}
                             style={{
-                                padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
-                                background: viewMode === 'daily' ? '#e0f2fe' : 'transparent',
-                                color: viewMode === 'daily' ? '#0284c7' : '#64748b'
+                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                background: viewMode === '3months' ? '#e0f2fe' : 'transparent',
+                                color: viewMode === '3months' ? '#0284c7' : '#64748b',
+                                fontSize: '12px'
                             }}
                         >
-                            Diário
+                            3 Meses
+                        </button>
+                        <button
+                            onClick={() => setViewMode('6months')}
+                            style={{
+                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                background: viewMode === '6months' ? '#e0f2fe' : 'transparent',
+                                color: viewMode === '6months' ? '#0284c7' : '#64748b',
+                                fontSize: '12px'
+                            }}
+                        >
+                            6 Meses
+                        </button>
+                        <button
+                            onClick={() => setViewMode('1year')}
+                            style={{
+                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                background: viewMode === '1year' ? '#e0f2fe' : 'transparent',
+                                color: viewMode === '1year' ? '#0284c7' : '#64748b',
+                                fontSize: '12px'
+                            }}
+                        >
+                            1 Ano
                         </button>
                     </div>
 
@@ -544,9 +595,11 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         <button onClick={() => handleNavigation('prev')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronLeft size={20} /></button>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 16px', fontWeight: '800', color: '#1e293b' }}>
                             <Calendar size={18} color="#3b82f6" />
-                            {viewMode === 'monthly'
+                            {viewMode === 'daily' 
+                                ? format(selectedMonth, "dd 'de' MMMM", { locale: ptBR }).toUpperCase()
+                                : viewMode === 'monthly'
                                 ? format(selectedMonth, 'MMMM yyyy', { locale: ptBR }).toUpperCase()
-                                : format(selectedMonth, "dd 'de' MMMM", { locale: ptBR }).toUpperCase()
+                                : `${format(addMonths(selectedMonth, viewMode === '3months' ? -2 : viewMode === '6months' ? -5 : -11), 'MMM/yy', { locale: ptBR })} ➔ ${format(selectedMonth, 'MMM/yy', { locale: ptBR })}`.toUpperCase()
                             }
                         </div>
                         <button onClick={() => handleNavigation('next')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronRight size={20} /></button>
@@ -658,8 +711,8 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                 </div>
             </div>
 
-            {/* Novo Gráfico: Evolução por Obra (APENAS NO MODO MENSAL) */}
-            {viewMode === 'monthly' && (
+            {/* Novo Gráfico: Evolução por Obra (MODO MENSAL E ACUMULADOS) */}
+            {viewMode !== 'daily' && (
                 <div style={{ background: 'white', padding: '28px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '400px', marginBottom: '32px' }}>
                     <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '24px' }}>Evolução de Custos por Obra</h3>
                     <div style={{ height: '300px' }}>
