@@ -58,6 +58,10 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
     const [viewMode, setViewMode] = useState<'daily' | 'monthly' | '3months' | '6months' | '1year' | 'custom'>('monthly');
     const [customStart, setCustomStart] = useState<string>(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
     const [customEnd, setCustomEnd] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+    // Estados "aplicados" — só mudam quando o usuário clica em Aplicar
+    const [appliedStart, setAppliedStart] = useState<string>(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+    const [appliedEnd, setAppliedEnd] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+    const [pendingCustom, setPendingCustom] = useState<boolean>(false);
 
     const getMaxHoursForDate = (date: Date): number => {
         const dayOfWeek = date.getDay(); // 0 = Domingo, 5 = Sexta
@@ -83,8 +87,8 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
             end = endOfMonth(selectedMonth);
         } else if (viewMode === 'custom') {
             try {
-                const cs = parseISO(customStart);
-                const ce = parseISO(customEnd);
+                const cs = parseISO(appliedStart);
+                const ce = parseISO(appliedEnd);
                 start = cs;
                 end = ce > cs ? ce : cs;
             } catch { /* usa padrão */ }
@@ -545,7 +549,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
             maintenanceIntervals: maintenanceIntervals.sort((a, b) => b.start.localeCompare(a.start))
         };
 
-    }, [resources, allocations, overtime, maintenanceHistory, partialAllocations, fuelData, fuelQuotes, worksites, selectedMonth, viewMode, allocationMetadata]);
+    }, [resources, allocations, overtime, maintenanceHistory, partialAllocations, fuelData, fuelQuotes, worksites, selectedMonth, viewMode, allocationMetadata, appliedStart, appliedEnd]);
 
     const handleNavigation = (direction: 'prev' | 'next') => {
         if (viewMode === 'daily') {
@@ -643,14 +647,15 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         <div style={{
                             display: 'flex', gap: '8px', alignItems: 'center',
                             background: 'white', padding: '8px 12px', borderRadius: '12px',
-                            border: '2px solid #7c3aed', boxShadow: '0 2px 8px rgba(124,58,237,0.15)'
+                            border: `2px solid ${pendingCustom ? '#f59e0b' : '#7c3aed'}`,
+                            boxShadow: `0 2px 8px ${pendingCustom ? 'rgba(245,158,11,0.2)' : 'rgba(124,58,237,0.15)'}`
                         }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                                 <label style={{ fontSize: '9px', fontWeight: '800', color: '#7c3aed', textTransform: 'uppercase' }}>De</label>
                                 <input
                                     type="date"
                                     value={customStart}
-                                    onChange={e => setCustomStart(e.target.value)}
+                                    onChange={e => { setCustomStart(e.target.value); setPendingCustom(true); }}
                                     style={{
                                         border: '1px solid #e2e8f0', borderRadius: '8px',
                                         padding: '4px 8px', fontSize: '12px', fontWeight: '700',
@@ -664,7 +669,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                 <input
                                     type="date"
                                     value={customEnd}
-                                    onChange={e => setCustomEnd(e.target.value)}
+                                    onChange={e => { setCustomEnd(e.target.value); setPendingCustom(true); }}
                                     style={{
                                         border: '1px solid #e2e8f0', borderRadius: '8px',
                                         padding: '4px 8px', fontSize: '12px', fontWeight: '700',
@@ -672,6 +677,34 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                     }}
                                 />
                             </div>
+                            {/* Botão Aplicar */}
+                            <button
+                                onClick={() => {
+                                    setAppliedStart(customStart);
+                                    setAppliedEnd(customEnd);
+                                    setPendingCustom(false);
+                                }}
+                                style={{
+                                    marginTop: '10px',
+                                    padding: '5px 14px',
+                                    borderRadius: '8px',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    fontWeight: '800',
+                                    fontSize: '12px',
+                                    background: pendingCustom
+                                        ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                                        : 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+                                    color: 'white',
+                                    boxShadow: pendingCustom
+                                        ? '0 2px 8px rgba(245,158,11,0.4)'
+                                        : '0 2px 8px rgba(124,58,237,0.3)',
+                                    transition: 'all 0.2s ease',
+                                    whiteSpace: 'nowrap'
+                                }}
+                            >
+                                {pendingCustom ? '⚡ Aplicar' : '✓ Aplicado'}
+                            </button>
                         </div>
                     )}
 
