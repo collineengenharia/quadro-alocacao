@@ -1,0 +1,5 @@
+# Configurações de deploy do Vercel para quadro-alocacao
+# ATENÇÃO: Cada aplicativo tem seu próprio Token, ID de Projeto e Organização!
+VERCEL_TOKEN=INSIRA_O_TOKEN_DA_VERCEL_DESTE_PROJETO_AQUI
+VERCEL_PROJECT_ID=INSIRA_O_PROJECT_ID_DESTE_PROJETO_AQUI
+VERCEL_ORG_ID=INSIRA_O_ORG_ID_DESTE_PROJETO_AQUI

@@ -79,6 +79,9 @@ const ResourceCard = ({ resource, onDragStart, onDragEnd, onClick, isSelected, o
 }) => {
 
   const isDraggable = (!inMaintenance) || (!!dragId);
+  const hasActions = (!inMaintenance && onHourSplit) || 
+                     (resource.type === 'employee' && onOvertime) || 
+                     (resource.type === 'machine' && onToggleMaintenance);
 
   return (
     <div
@@ -93,128 +96,24 @@ const ResourceCard = ({ resource, onDragStart, onDragEnd, onClick, isSelected, o
       style={{
         cursor: isDraggable ? 'grab' : 'not-allowed',
         position: 'relative',
-        opacity: inMaintenance && !dragId ? 0.7 : 1 // Menor opacidade apenas se bloqueado de verdade
+        opacity: inMaintenance && !dragId ? 0.7 : 1, // Menor opacidade apenas se bloqueado de verdade
+        minHeight: '85px'
       }}
     >
-      {resource.type === 'machine' && onToggleMaintenance && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleMaintenance(resource.id);
-          }}
-          style={{
-            position: 'absolute',
-            top: '4px',
-            right: '4px',
-            background: inMaintenance ? '#fb923c' : '#f1f5f9',
-            border: 'none',
-            borderRadius: '6px',
-            padding: '4px 6px',
-            cursor: 'pointer',
-            fontSize: '14px',
-            zIndex: 10,
-            transition: 'all 0.2s'
-          }}
-          title={inMaintenance ? "Retornar ao Serviço" : "Marcar em Manutenção"}
-        >
-          🔧
-        </button>
-      )}
-
-      {/* Botão de Divisão de Horas (Esquerda Superior) */}
-      {!inMaintenance && onHourSplit && (
-        allocatedHours ? (
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              onHourSplit(resource.id);
-            }}
-            style={{
-              position: 'absolute',
-              top: '4px',
-              left: '4px',
-              background: 'rgba(139, 92, 246, 0.9)',
-              color: 'white',
-              borderRadius: '8px',
-              padding: '2px 6px',
-              cursor: 'pointer',
-              fontSize: '10px',
-              fontWeight: 'bold',
-              fontFamily: 'monospace',
-              zIndex: 10,
-              boxShadow: '0 2px 4px rgba(139, 92, 246, 0.3)'
-            }}
-            title="Editar Carga Horária"
-          >
-            {allocatedHours}h
-          </div>
-        ) : (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onHourSplit(resource.id);
-            }}
-            style={{
-              position: 'absolute',
-              top: '4px',
-              left: '4px',
-              background: '#f1f5f9',
-              border: 'none',
-              borderRadius: '6px',
-              padding: '4px 6px',
-              cursor: 'pointer',
-              fontSize: '14px',
-              zIndex: 10,
-              transition: 'all 0.2s',
-              color: '#8b5cf6'
-            }}
-            title="Dividir Carga Horária"
-          >
-            ⏱️
-          </button>
-        )
-      )}
-
-      {resource.type === 'employee' && onOvertime && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onOvertime(resource.id);
-          }}
-          style={{
-            position: 'absolute',
-            top: '4px',
-            right: '4px',
-            background: hasOvertime ? '#3b82f6' : '#f1f5f9',
-            color: hasOvertime ? 'white' : '#64748b',
-            border: 'none',
-            borderRadius: '6px',
-            padding: '4px 6px',
-            cursor: 'pointer',
-            fontSize: '14px',
-            zIndex: 10,
-            transition: 'all 0.2s',
-            boxShadow: hasOvertime ? '0 2px 6px rgba(59, 130, 246, 0.4)' : 'none'
-          }}
-          title="Lançar Horas Extras"
-        >
-          {hasOvertime ? '💲' : '💲'}
-        </button>
-      )}
       {inMaintenance && (
         <div style={{
           position: 'absolute',
-          top: '28px',
+          top: '4px',
           right: '4px',
           background: '#fb923c',
           color: 'white',
-          fontSize: '8px',
+          fontSize: '7px',
           padding: '2px 4px',
           borderRadius: '4px',
           fontWeight: '800',
           zIndex: 10
         }}>
-          MANUTENÇÃO
+          MANUT.
         </div>
       )}
       {resource.isAdministrative && (
@@ -224,7 +123,7 @@ const ResourceCard = ({ resource, onDragStart, onDragEnd, onClick, isSelected, o
           left: '4px',
           background: '#64748b',
           color: 'white',
-          fontSize: '8px',
+          fontSize: '7px',
           padding: '2px 4px',
           borderRadius: '4px',
           fontWeight: '800',
@@ -243,17 +142,137 @@ const ResourceCard = ({ resource, onDragStart, onDragEnd, onClick, isSelected, o
 
       {resource.type === 'machine' && linkedResource && (
         <div style={{
-          marginTop: '6px',
-          paddingTop: '6px',
+          marginTop: '4px',
+          paddingTop: '4px',
           borderTop: '1px solid #e2e8f0',
-          fontSize: '10px',
+          fontSize: '8px',
           fontWeight: '700',
           color: '#3b82f6',
           display: 'flex',
           alignItems: 'center',
-          gap: '4px'
+          gap: '2px'
         }}>
           👤 {linkedResource.name}
+        </div>
+      )}
+
+      {hasActions && (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          gap: '4px',
+          width: '100%',
+          marginTop: 'auto',
+          paddingTop: '4px',
+          borderTop: '1px solid #f1f5f9'
+        }}>
+          {/* Divisão de horas */}
+          {!inMaintenance && onHourSplit && (
+            allocatedHours ? (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onHourSplit(resource.id);
+                }}
+                style={{
+                  background: 'rgba(139, 92, 246, 0.1)',
+                  color: '#8b5cf6',
+                  border: '1px solid rgba(139, 92, 246, 0.2)',
+                  borderRadius: '4px',
+                  width: '24px',
+                  height: '18px',
+                  cursor: 'pointer',
+                  fontSize: '8px',
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.2s'
+                }}
+                title="Editar Carga Horária"
+              >
+                {allocatedHours}h
+              </button>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onHourSplit(resource.id);
+                }}
+                style={{
+                  background: '#f1f5f9',
+                  border: 'none',
+                  borderRadius: '4px',
+                  width: '18px',
+                  height: '18px',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.2s',
+                  color: '#8b5cf6'
+                }}
+                title="Dividir Carga Horária"
+              >
+                ⏱️
+              </button>
+            )
+          )}
+
+          {/* Horas extras (Funcionário apenas) */}
+          {resource.type === 'employee' && onOvertime && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onOvertime(resource.id);
+              }}
+              style={{
+                background: hasOvertime ? '#eff6ff' : '#f1f5f9',
+                color: hasOvertime ? '#2563eb' : '#64748b',
+                border: hasOvertime ? '1px solid #bfdbfe' : 'none',
+                borderRadius: '4px',
+                width: '18px',
+                height: '18px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s'
+              }}
+              title="Lançar Horas Extras"
+            >
+              💲
+            </button>
+          )}
+
+          {/* Manutenção (Máquina apenas) */}
+          {resource.type === 'machine' && onToggleMaintenance && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleMaintenance(resource.id);
+              }}
+              style={{
+                background: inMaintenance ? '#fffaf5' : '#f1f5f9',
+                border: inMaintenance ? '1px solid #ffedd5' : 'none',
+                borderRadius: '4px',
+                width: '18px',
+                height: '18px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s',
+                color: inMaintenance ? '#ea580c' : '#64748b'
+              }}
+              title={inMaintenance ? "Retornar ao Serviço" : "Marcar em Manutenção"}
+            >
+              🔧
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -1529,7 +1548,7 @@ function App() {
       <header style={{
         background: 'white',
         boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
-        padding: '16px 24px',
+        padding: '8px 16px',
         position: 'sticky',
         top: 0,
         zIndex: 50,
@@ -1537,88 +1556,88 @@ function App() {
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
-        gap: '20px'
+        gap: '10px'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '30px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <div>
-            <h1 style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginBottom: '2px', letterSpacing: '-0.5px' }}>
+            <h1 style={{ fontSize: '17px', fontWeight: '900', color: '#0f172a', marginBottom: '1px', letterSpacing: '-0.5px' }}>
               COLLINE ENGENHARIA
             </h1>
-            <p style={{ fontSize: '12px', color: '#3b82f6', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '2px' }}>
+            <p style={{ fontSize: '8px', color: '#3b82f6', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '2px' }}>
               Quadro de Alocação Digital
             </p>
           </div>
 
-          <div style={{ display: 'flex', gap: '6px', background: '#f8fafc', padding: '6px', borderRadius: '16px', border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', gap: '4px', background: '#f8fafc', padding: '4px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
             <button
               onClick={() => setActiveTab('board')}
               style={{
-                padding: '10px 24px',
-                borderRadius: '12px',
+                padding: '6px 14px',
+                borderRadius: '10px',
                 border: 'none',
                 background: activeTab === 'board' ? '#3b82f6' : 'transparent',
                 color: activeTab === 'board' ? 'white' : '#64748b',
                 fontWeight: '700',
-                fontSize: '14px',
+                fontSize: '12px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
+                gap: '6px',
                 boxShadow: activeTab === 'board' ? '0 4px 10px rgba(59, 130, 246, 0.3)' : 'none',
                 transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
               }}
             >
-              <LayoutDashboard size={18} /> Quadro
+              <LayoutDashboard size={14} /> Quadro
             </button>
             <button
               onClick={() => setActiveTab('fuel')}
               style={{
-                padding: '10px 24px',
-                borderRadius: '12px',
+                padding: '6px 14px',
+                borderRadius: '10px',
                 border: 'none',
                 background: activeTab === 'fuel' ? '#3b82f6' : 'transparent',
                 color: activeTab === 'fuel' ? 'white' : '#64748b',
                 fontWeight: '700',
-                fontSize: '14px',
+                fontSize: '12px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
+                gap: '6px',
                 boxShadow: activeTab === 'fuel' ? '0 4px 10px rgba(59, 130, 246, 0.3)' : 'none',
                 transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
               }}
             >
-              <FuelIcon size={18} /> Combustível
+              <FuelIcon size={14} /> Combustível
             </button>
             <button
               onClick={() => setActiveTab('analytics')}
               style={{
-                padding: '10px 24px',
-                borderRadius: '12px',
+                padding: '6px 14px',
+                borderRadius: '10px',
                 border: 'none',
                 background: activeTab === 'analytics' ? '#3b82f6' : 'transparent',
                 color: activeTab === 'analytics' ? 'white' : '#64748b',
                 fontWeight: '700',
-                fontSize: '14px',
+                fontSize: '12px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
+                gap: '6px',
                 boxShadow: activeTab === 'analytics' ? '0 4px 10px rgba(59, 130, 246, 0.3)' : 'none',
                 transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
               }}
             >
-              <PieChartIcon size={18} /> Painel Analítico
+              <PieChartIcon size={14} /> Painel Analítico
             </button>
           </div>
         </div>
 
         {(activeTab === 'board' || activeTab === 'fuel') && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#ffffff', padding: '8px 16px', borderRadius: '16px', boxShadow: '0 2px 6px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0' }}>
-            <button onClick={() => setCurrentDate(subDays(currentDate, 1))} className="btn" style={{ padding: '8px', background: '#f1f5f9', border: 'none', borderRadius: '10px', cursor: 'pointer' }}>
-              <ChevronLeft size={20} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#ffffff', padding: '5px 12px', borderRadius: '12px', boxShadow: '0 2px 6px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0' }}>
+            <button onClick={() => setCurrentDate(subDays(currentDate, 1))} className="btn" style={{ padding: '5px', background: '#f1f5f9', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>
+              <ChevronLeft size={16} />
             </button>
-            <div style={{ position: 'relative', minWidth: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ position: 'relative', minWidth: '170px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <input
                 type="date"
                 value={format(currentDate, 'yyyy-MM-dd')}
@@ -1639,48 +1658,48 @@ function App() {
                   zIndex: 2
                 }}
               />
-              <div style={{ padding: '0 20px', fontWeight: '800', fontSize: '16px', color: '#1e293b', textAlign: 'center', pointerEvents: 'none' }}>
-                <CalendarIcon size={18} style={{ display: 'inline', marginRight: '10px', color: '#3b82f6' }} />
+              <div style={{ padding: '0 12px', fontWeight: '800', fontSize: '13px', color: '#1e293b', textAlign: 'center', pointerEvents: 'none' }}>
+                <CalendarIcon size={14} style={{ display: 'inline', marginRight: '6px', color: '#3b82f6' }} />
                 {format(currentDate, "dd 'de' MMMM", { locale: ptBR })}
               </div>
             </div>
-            <button onClick={() => setCurrentDate(addDays(currentDate, 1))} className="btn" style={{ padding: '8px', background: '#f1f5f9', border: 'none', borderRadius: '10px', cursor: 'pointer' }}>
-              <ChevronRight size={20} />
+            <button onClick={() => setCurrentDate(addDays(currentDate, 1))} className="btn" style={{ padding: '5px', background: '#f1f5f9', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>
+              <ChevronRight size={16} />
             </button>
           </div>
         )}
 
         {/* CONTROLES DO QUADRO */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {/* Status da Alocação */}
           <button
             onClick={handleToggleFinalAllocation}
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '8px',
-              padding: '8px 14px',
-              borderRadius: '12px',
+              gap: '6px',
+              padding: '6px 10px',
+              borderRadius: '10px',
               border: '2px solid',
               borderColor: currentMetadata.isFinalAllocation ? '#10b981' : '#f59e0b',
               background: currentMetadata.isFinalAllocation ? '#ecfdf5' : '#fffbeb',
               color: currentMetadata.isFinalAllocation ? '#065f46' : '#92400e',
               cursor: 'pointer',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: '700',
               transition: 'all 0.2s'
             }}
           >
             <div style={{
-              width: '18px',
-              height: '18px',
-              borderRadius: '5px',
+              width: '14px',
+              height: '14px',
+              borderRadius: '4px',
               background: currentMetadata.isFinalAllocation ? '#10b981' : '#f59e0b',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               color: 'white',
-              fontSize: '11px'
+              fontSize: '9px'
             }}>
               {currentMetadata.isFinalAllocation ? '✓' : '📋'}
             </div>
@@ -1688,7 +1707,7 @@ function App() {
           </button>
 
           {/* Copiar/Colar */}
-          <div style={{ display: 'flex', gap: '6px' }}>
+          <div style={{ display: 'flex', gap: '4px' }}>
             <button
               onClick={handleCopyBoard}
               className="btn"
@@ -1696,12 +1715,12 @@ function App() {
                 background: '#f1f5f9',
                 color: '#475569',
                 border: 'none',
-                fontSize: '13px',
-                padding: '8px 14px',
-                borderRadius: '12px',
+                fontSize: '11px',
+                padding: '6px 10px',
+                borderRadius: '10px',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
+                gap: '4px',
                 fontWeight: '700',
                 cursor: 'pointer'
               }}
@@ -1715,12 +1734,12 @@ function App() {
                 background: clipboard ? '#3b82f6' : '#f1f5f9',
                 color: clipboard ? 'white' : '#94a3b8',
                 border: 'none',
-                fontSize: '13px',
-                padding: '8px 14px',
-                borderRadius: '12px',
+                fontSize: '11px',
+                padding: '6px 10px',
+                borderRadius: '10px',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
+                gap: '4px',
                 fontWeight: '700',
                 cursor: clipboard ? 'pointer' : 'not-allowed',
                 opacity: clipboard ? 1 : 0.6
@@ -1731,25 +1750,25 @@ function App() {
           </div>
 
           {/* Export/Import/Image */}
-          <div style={{ display: 'flex', gap: '6px' }}>
+          <div style={{ display: 'flex', gap: '4px' }}>
             <button
               onClick={handleExportData}
               className="btn btn-primary"
-              style={{ fontSize: '13px', padding: '8px 14px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+              style={{ fontSize: '11px', padding: '6px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '4px' }}
               title="Baixar Backup de Dados (JSON)"
             >
-              <FileJson size={16} /> Backup
+              <FileJson size={13} /> Backup
             </button>
             <button
               onClick={handleExportImage}
               className="btn"
               style={{
-                fontSize: '13px',
-                padding: '8px 14px',
-                borderRadius: '12px',
+                fontSize: '11px',
+                padding: '6px 10px',
+                borderRadius: '10px',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
+                gap: '4px',
                 background: '#f59e0b',
                 color: 'white',
                 border: 'none',
@@ -1758,10 +1777,10 @@ function App() {
               }}
               title="Baixar Foto do Quadro (PDF)"
             >
-              <Camera size={16} /> Imagem
+              <Camera size={13} /> Imagem
             </button>
-            <label className="btn btn-success" style={{ fontSize: '13px', padding: '8px 14px', borderRadius: '12px', cursor: 'pointer', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Upload size={16} /> Importar
+            <label className="btn btn-success" style={{ fontSize: '11px', padding: '6px 10px', borderRadius: '10px', cursor: 'pointer', margin: 0, display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Upload size={13} /> Importar
               <input
                 type="file"
                 className="hidden"
@@ -1776,12 +1795,12 @@ function App() {
               }}
               className="btn"
               style={{
-                fontSize: '13px',
-                padding: '8px 14px',
-                borderRadius: '12px',
+                fontSize: '11px',
+                padding: '6px 10px',
+                borderRadius: '10px',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
+                gap: '4px',
                 background: '#fee2e2',
                 color: '#dc2626',
                 border: '1px solid #fecaca',
@@ -1790,7 +1809,7 @@ function App() {
               }}
               title={`Sair (${user?.email})`}
             >
-              <LogOut size={16} /> Sair
+              <LogOut size={13} /> Sair
             </button>
           </div>
         </div>
@@ -1798,7 +1817,7 @@ function App() {
 
       {/* CONTEÚDO */}
       {activeTab === 'board' ? (
-        <main ref={boardRef} style={{ padding: '32px', maxWidth: '1600px', margin: '0 auto' }} className="animate-fade-in">
+        <main ref={boardRef} style={{ padding: '18px 20px', maxWidth: '1600px', margin: '0 auto' }} className="animate-fade-in">
           {/* OBRAS ATIVAS */}
           <div className="obras-grid">
             {worksites
@@ -1944,7 +1963,10 @@ function App() {
           onMonthChange={handleMonthChange}
           fuelQuotes={fuelQuotes}
           allocationMetadata={allocationMetadata}
+          observations={observations}
+          resourceLinks={resourceLinks}
         />
+
       )
       }
 

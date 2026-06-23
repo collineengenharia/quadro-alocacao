@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import {
     TrendingUp,
     AlertTriangle,
@@ -40,6 +41,8 @@ interface AnalyticalDashboardProps {
     selectedMonth: Date;
     onMonthChange: (date: Date) => void;
     allocationMetadata: AllocationMetadata;
+    observations: { [date: string]: { [worksiteId: string]: string } };
+    resourceLinks: { [dateKey: string]: { [machineId: string]: string } };
 }
 
 export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
@@ -53,7 +56,9 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
     worksites,
     selectedMonth,
     onMonthChange,
-    allocationMetadata
+    allocationMetadata,
+    observations,
+    resourceLinks
 }) => {
     const [viewMode, setViewMode] = useState<'daily' | 'monthly' | '3months' | '6months' | '1year' | 'custom'>('monthly');
     const [customStart, setCustomStart] = useState<string>(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
@@ -560,27 +565,266 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
         }
     };
 
+    // ========================================================
+    // EXPORTAR PLANILHA DE ALOCAÇÃO (Excel)
+    // ========================================================
+    const handleExportAllocationSheet = () => {
+        // 1. Determinar o período igual ao selecionado no painel
+        let start = startOfMonth(selectedMonth);
+        let end = endOfMonth(selectedMonth);
+
+        if (viewMode === 'daily') {
+            start = selectedMonth;
+            end = selectedMonth;
+        } else if (viewMode === '3months') {
+            start = startOfMonth(addMonths(selectedMonth, -2));
+            end = endOfMonth(selectedMonth);
+        } else if (viewMode === '6months') {
+            start = startOfMonth(addMonths(selectedMonth, -5));
+            end = endOfMonth(selectedMonth);
+        } else if (viewMode === '1year') {
+            start = startOfMonth(addMonths(selectedMonth, -11));
+            end = endOfMonth(selectedMonth);
+        } else if (viewMode === 'custom') {
+            try {
+                const cs = parseISO(appliedStart);
+                const ce = parseISO(appliedEnd);
+                start = cs;
+                end = ce > cs ? ce : cs;
+            } catch { /* usa padrão */ }
+        }
+
+        const days = eachDayOfInterval({ start, end });
+
+        // Helper: horas máximas do dia
+        const getMaxHours = (date: Date): number => {
+            const dow = date.getDay();
+            if (dow === 0 || dow === 6) return 0;
+            return dow === 5 ? 8 : 9;
+        };
+
+        // 2. Montar linhas da planilha
+        const rows: (string | number)[][] = [];
+
+        days.forEach(day => {
+            const dateKey = format(day, 'yyyy-MM-dd');
+            const dateFormatted = format(day, 'dd/MM/yyyy');
+            const maxHours = getMaxHours(day);
+
+            // Alocações e parciais do dia
+            const dailyAllocs = allocations[dateKey] || {};
+            const dailyPartials = partialAllocations[dateKey] || {};
+            const dailyObs = observations[dateKey] || {};
+            const dailyLinks = resourceLinks[dateKey] || {};
+            // dailyLinks: { machineId: employeeId }
+            // Inverter para: { employeeId: machineName }
+            const employeeToMachine: { [empId: string]: string } = {};
+            Object.entries(dailyLinks).forEach(([machineId, employeeId]) => {
+                const machine = resources.find(r => r.id === machineId);
+                if (machine) employeeToMachine[employeeId] = machine.name;
+            });
+
+            // Filtrar apenas funcionários ativos naquele dia
+            const activeEmployees = resources.filter(r => {
+                if (r.type !== 'employee') return false;
+                if (r.isAdministrative) return false;
+                if (r.dismissedAt && dateKey >= r.dismissedAt) return false;
+                return true;
+            });
+
+            let addedAnyRowForDay = false;
+
+            activeEmployees.forEach(employee => {
+                // Verificar se tem parciais
+                const partials = dailyPartials[employee.id];
+
+                // Máquina vinculada via resourceLinks (preciso e direto)
+                const linkedMachineName = employeeToMachine[employee.id] || '';
+
+                // Função para achar máquina: primeiro tenta link direto, depois heurística por obra
+                const findLinkedMachine = (worksiteId: string): string => {
+                    // 1. Link direto tem prioridade
+                    if (linkedMachineName) return linkedMachineName;
+                    // 2. Heurística: única máquina na mesma obra
+                    if (!worksiteId || worksiteId === 'pateo') return '';
+                    const machinesInSameWorksite = resources.filter(r => {
+                        if (r.type !== 'machine') return false;
+                        if (r.dismissedAt && dateKey >= r.dismissedAt) return false;
+                        const alloc = dailyAllocs[r.id];
+                        if (alloc === worksiteId) return true;
+                        const mPartials = dailyPartials[r.id];
+                        if (mPartials && mPartials.some(p => p.worksiteId === worksiteId)) return true;
+                        return false;
+                    });
+                    return machinesInSameWorksite.length === 1 ? machinesInSameWorksite[0].name : '';
+                };
+
+                if (partials && partials.length > 0) {
+                    // MÚLTIPLAS LINHAS: uma por parcial
+                    partials.forEach(partial => {
+                        const wsId = partial.worksiteId;
+                        const wsName = wsId === 'pateo' ? 'PÁTIO'
+                            : worksites.find(w => w.id === wsId)?.name || wsId;
+                        const obs = wsId === 'pateo' ? '' : (dailyObs[wsId] || '');
+                        const machine = findLinkedMachine(wsId);
+
+                        rows.push([
+                            dateFormatted,
+                            partial.hours,
+                            employee.name,
+                            employee.role || '',
+                            machine,
+                            wsName,
+                            obs
+                        ]);
+                        addedAnyRowForDay = true;
+                    });
+                } else {
+                    // LINHA Única: alocação simples
+                    const wsId = dailyAllocs[employee.id] || 'pateo';
+                    const wsName = wsId === 'pateo' ? 'PÁTIO'
+                        : worksites.find(w => w.id === wsId)?.name || wsId;
+                    const obs = wsId === 'pateo' ? '' : (dailyObs[wsId] || '');
+                    const machine = findLinkedMachine(wsId);
+
+                    rows.push([
+                        dateFormatted,
+                        maxHours > 0 ? maxHours : 0,
+                        employee.name,
+                        employee.role || '',
+                        machine,
+                        wsName,
+                        obs
+                    ]);
+                    addedAnyRowForDay = true;
+                }
+            });
+
+            // Linha em branco para separar os dias visualmente
+            if (addedAnyRowForDay) {
+                rows.push(['', '', '', '', '', '', '']);
+            }
+        });
+
+        // 3. Montar o workbook Excel com estilo
+        const headerRow = ['DATA', 'HORAS\nTRABALHADAS', 'NOME', 'FUNÇÃO', 'EQUIPAMENTO', 'OBRA', 'OBSERVAÇÃO'];
+
+        const wsData = [headerRow, ...rows];
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+        // Larguras de coluna
+        ws['!cols'] = [
+            { wch: 13 },  // DATA
+            { wch: 10 },  // HORAS
+            { wch: 32 },  // NOME
+            { wch: 26 },  // FUNÇÃO
+            { wch: 24 },  // EQUIPAMENTO
+            { wch: 24 },  // OBRA
+            { wch: 34 },  // OBSERVAÇÃO
+        ];
+
+        // Altura da linha do cabeçalho
+        ws['!rows'] = [{ hpt: 36 }];
+
+        // Estilo do cabeçalho (fundo amarelo, negrito, bordas)
+        const headerStyle = {
+            fill: { fgColor: { rgb: 'FFFF00' } },
+            font: { bold: true, sz: 11 },
+            alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+            border: {
+                top: { style: 'thin', color: { rgb: '000000' } },
+                bottom: { style: 'thin', color: { rgb: '000000' } },
+                left: { style: 'thin', color: { rgb: '000000' } },
+                right: { style: 'thin', color: { rgb: '000000' } },
+            }
+        };
+
+        const dataStyle = {
+            font: { sz: 10 },
+            alignment: { vertical: 'center', wrapText: false },
+            border: {
+                top: { style: 'thin', color: { rgb: 'CCCCCC' } },
+                bottom: { style: 'thin', color: { rgb: 'CCCCCC' } },
+                left: { style: 'thin', color: { rgb: 'CCCCCC' } },
+                right: { style: 'thin', color: { rgb: 'CCCCCC' } },
+            }
+        };
+
+        // Aplicar estilos célula por célula
+        const totalRows = wsData.length;
+        const totalCols = 7;
+        const colLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+
+        for (let r = 0; r < totalRows; r++) {
+            for (let c = 0; c < totalCols; c++) {
+                const cellRef = colLetters[c] + (r + 1);
+                if (!ws[cellRef]) ws[cellRef] = { v: '', t: 's' };
+                ws[cellRef].s = r === 0 ? headerStyle : dataStyle;
+            }
+        }
+
+        // Criar o workbook e salvar
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Alocação');
+
+        const periodLabel = viewMode === 'monthly'
+            ? format(selectedMonth, 'MMMM-yyyy', { locale: ptBR })
+            : viewMode === 'daily'
+            ? format(selectedMonth, 'dd-MM-yyyy')
+            : `${format(start, 'dd-MM-yyyy')}_a_${format(end, 'dd-MM-yyyy')}`;
+
+        XLSX.writeFile(wb, `Planilha_Alocacao_${periodLabel}.xlsx`);
+    };
+    // ========================================================
+
     return (
-        <div className="dashboard-container" style={{ padding: '24px', background: '#f8fafc', minHeight: '100vh', paddingBottom: '100px' }}>
+        <div className="dashboard-container" style={{ padding: '12px 16px', background: '#f8fafc', minHeight: '100vh', paddingBottom: '60px' }}>
             {/* Header com Filtros */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <div>
-                    <h2 style={{ fontSize: '24px', fontWeight: '900', color: '#0f172a', margin: 0 }}>Dashboard Analítico</h2>
-                    <p style={{ color: '#64748b', margin: '4px 0 0 0', fontWeight: '600' }}>
+                    <h2 style={{ fontSize: '18px', fontWeight: '900', color: '#0f172a', margin: 0 }}>Dashboard Analítico</h2>
+                    <p style={{ color: '#64748b', margin: '2px 0 0 0', fontWeight: '600', fontSize: '11px' }}>
                         {viewMode === 'monthly' ? 'Visão Mensal Consolidada' : 'Visão Diária Detalhada'}
                     </p>
                 </div>
 
-                <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                {/* Botão Exportar Planilha */}
+                <button
+                    onClick={handleExportAllocationSheet}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 14px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)',
+                        color: 'white',
+                        fontWeight: '800',
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 14px rgba(22, 163, 74, 0.35)',
+                        transition: 'all 0.2s ease',
+                        whiteSpace: 'nowrap'
+                    }}
+                    title="Exportar planilha de alocação do período selecionado (.xlsx)"
+                    onMouseEnter={e => (e.currentTarget.style.transform = 'translateY(-2px)')}
+                    onMouseLeave={e => (e.currentTarget.style.transform = 'translateY(0)')}
+                >
+                    📊 Exportar Planilha
+                </button>
+
+
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     {/* Toggle Display Mode */}
-                    <div style={{ background: 'white', padding: '4px', borderRadius: '12px', display: 'flex', gap: '4px', border: '1px solid #e2e8f0' }}>
+                    <div style={{ background: 'white', padding: '2px', borderRadius: '8px', display: 'flex', gap: '2px', border: '1px solid #e2e8f0' }}>
                         <button
                             onClick={() => setViewMode('daily')}
                             style={{
-                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                padding: '5px 10px', borderRadius: '6px', border: 'none', fontWeight: '800', cursor: 'pointer',
                                 background: viewMode === 'daily' ? '#e0f2fe' : 'transparent',
                                 color: viewMode === 'daily' ? '#0284c7' : '#64748b',
-                                fontSize: '12px'
+                                fontSize: '11px'
                             }}
                         >
                             Diário
@@ -588,10 +832,10 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         <button
                             onClick={() => setViewMode('monthly')}
                             style={{
-                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                padding: '5px 10px', borderRadius: '6px', border: 'none', fontWeight: '800', cursor: 'pointer',
                                 background: viewMode === 'monthly' ? '#e0f2fe' : 'transparent',
                                 color: viewMode === 'monthly' ? '#0284c7' : '#64748b',
-                                fontSize: '12px'
+                                fontSize: '11px'
                             }}
                         >
                             Mensal
@@ -599,10 +843,10 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         <button
                             onClick={() => setViewMode('3months')}
                             style={{
-                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                padding: '5px 10px', borderRadius: '6px', border: 'none', fontWeight: '800', cursor: 'pointer',
                                 background: viewMode === '3months' ? '#e0f2fe' : 'transparent',
                                 color: viewMode === '3months' ? '#0284c7' : '#64748b',
-                                fontSize: '12px'
+                                fontSize: '11px'
                             }}
                         >
                             3 Meses
@@ -610,10 +854,10 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         <button
                             onClick={() => setViewMode('6months')}
                             style={{
-                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                padding: '5px 10px', borderRadius: '6px', border: 'none', fontWeight: '800', cursor: 'pointer',
                                 background: viewMode === '6months' ? '#e0f2fe' : 'transparent',
                                 color: viewMode === '6months' ? '#0284c7' : '#64748b',
-                                fontSize: '12px'
+                                fontSize: '11px'
                             }}
                         >
                             6 Meses
@@ -621,10 +865,10 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         <button
                             onClick={() => setViewMode('1year')}
                             style={{
-                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                padding: '5px 10px', borderRadius: '6px', border: 'none', fontWeight: '800', cursor: 'pointer',
                                 background: viewMode === '1year' ? '#e0f2fe' : 'transparent',
                                 color: viewMode === '1year' ? '#0284c7' : '#64748b',
-                                fontSize: '12px'
+                                fontSize: '11px'
                             }}
                         >
                             1 Ano
@@ -632,10 +876,10 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                         <button
                             onClick={() => setViewMode('custom')}
                             style={{
-                                padding: '8px 12px', borderRadius: '8px', border: 'none', fontWeight: '800', cursor: 'pointer',
+                                padding: '5px 10px', borderRadius: '6px', border: 'none', fontWeight: '800', cursor: 'pointer',
                                 background: viewMode === 'custom' ? '#f3e8ff' : 'transparent',
                                 color: viewMode === 'custom' ? '#7c3aed' : '#64748b',
-                                fontSize: '12px'
+                                fontSize: '11px'
                             }}
                         >
                             📅 Personalizado
@@ -645,34 +889,34 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                     {/* Painel de datas personalizadas */}
                     {viewMode === 'custom' && (
                         <div style={{
-                            display: 'flex', gap: '8px', alignItems: 'center',
-                            background: 'white', padding: '8px 12px', borderRadius: '12px',
+                            display: 'flex', gap: '6px', alignItems: 'center',
+                            background: 'white', padding: '4px 8px', borderRadius: '8px',
                             border: `2px solid ${pendingCustom ? '#f59e0b' : '#7c3aed'}`,
                             boxShadow: `0 2px 8px ${pendingCustom ? 'rgba(245,158,11,0.2)' : 'rgba(124,58,237,0.15)'}`
                         }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                <label style={{ fontSize: '9px', fontWeight: '800', color: '#7c3aed', textTransform: 'uppercase' }}>De</label>
+                                <label style={{ fontSize: '8px', fontWeight: '800', color: '#7c3aed', textTransform: 'uppercase' }}>De</label>
                                 <input
                                     type="date"
                                     value={customStart}
                                     onChange={e => { setCustomStart(e.target.value); setPendingCustom(true); }}
                                     style={{
-                                        border: '1px solid #e2e8f0', borderRadius: '8px',
-                                        padding: '4px 8px', fontSize: '12px', fontWeight: '700',
+                                        border: '1px solid #e2e8f0', borderRadius: '6px',
+                                        padding: '2px 6px', fontSize: '11px', fontWeight: '700',
                                         color: '#1e293b', outline: 'none', cursor: 'pointer'
                                     }}
                                 />
                             </div>
-                            <div style={{ color: '#94a3b8', fontWeight: '800', fontSize: '14px', marginTop: '10px' }}>→</div>
+                            <div style={{ color: '#94a3b8', fontWeight: '800', fontSize: '12px', marginTop: '10px' }}>→</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                <label style={{ fontSize: '9px', fontWeight: '800', color: '#7c3aed', textTransform: 'uppercase' }}>Até</label>
+                                <label style={{ fontSize: '8px', fontWeight: '800', color: '#7c3aed', textTransform: 'uppercase' }}>Até</label>
                                 <input
                                     type="date"
                                     value={customEnd}
                                     onChange={e => { setCustomEnd(e.target.value); setPendingCustom(true); }}
                                     style={{
-                                        border: '1px solid #e2e8f0', borderRadius: '8px',
-                                        padding: '4px 8px', fontSize: '12px', fontWeight: '700',
+                                        border: '1px solid #e2e8f0', borderRadius: '6px',
+                                        padding: '2px 6px', fontSize: '11px', fontWeight: '700',
                                         color: '#1e293b', outline: 'none', cursor: 'pointer'
                                     }}
                                 />
@@ -686,12 +930,12 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                 }}
                                 style={{
                                     marginTop: '10px',
-                                    padding: '5px 14px',
-                                    borderRadius: '8px',
+                                    padding: '3px 10px',
+                                    borderRadius: '6px',
                                     border: 'none',
                                     cursor: 'pointer',
                                     fontWeight: '800',
-                                    fontSize: '12px',
+                                    fontSize: '11px',
                                     background: pendingCustom
                                         ? 'linear-gradient(135deg, #f59e0b, #d97706)'
                                         : 'linear-gradient(135deg, #7c3aed, #6d28d9)',
@@ -710,10 +954,10 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
                     {/* Navegação por setas (oculta em modo personalizado) */}
                     {viewMode !== 'custom' && (
-                    <div style={{ display: 'flex', gap: '12px', background: 'white', padding: '6px', borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
-                        <button onClick={() => handleNavigation('prev')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronLeft size={20} /></button>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 16px', fontWeight: '800', color: '#1e293b' }}>
-                            <Calendar size={18} color="#3b82f6" />
+                    <div style={{ display: 'flex', gap: '6px', background: 'white', padding: '3px', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                        <button onClick={() => handleNavigation('prev')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '4px', color: '#64748b' }}><ChevronLeft size={16} /></button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '0 8px', fontWeight: '800', color: '#1e293b', fontSize: '11px' }}>
+                            <Calendar size={14} color="#3b82f6" />
                             {viewMode === 'daily' 
                                 ? format(selectedMonth, "dd 'de' MMMM", { locale: ptBR }).toUpperCase()
                                 : viewMode === 'monthly'
@@ -721,89 +965,88 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                 : `${format(addMonths(selectedMonth, viewMode === '3months' ? -2 : viewMode === '6months' ? -5 : -11), 'MMM/yy', { locale: ptBR })} ➔ ${format(selectedMonth, 'MMM/yy', { locale: ptBR })}`.toUpperCase()
                             }
                         </div>
-                        <button onClick={() => handleNavigation('next')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '8px', color: '#64748b' }}><ChevronRight size={20} /></button>
+                        <button onClick={() => handleNavigation('next')} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '4px', color: '#64748b' }}><ChevronRight size={16} /></button>
                     </div>
                     )}
                 </div>
             </div>
 
             {/* Grid de Cards Principais */}
-            {/* Grid de Cards Principais */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px', marginBottom: '32px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '16px' }}>
 
                 {/* 1. Custo TOTAL (Soma Geral) */}
-                <div style={{ background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)', padding: '24px', borderRadius: '24px', color: 'white', boxShadow: '0 10px 30px rgba(0,0,0,0.15)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-                        <div style={{ background: 'rgba(255,255,255,0.1)', padding: '10px', borderRadius: '14px' }}><TrendingUp size={24} /></div>
-                        <ArrowUpRight size={20} color="#4ade80" />
+                <div style={{ background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)', padding: '12px 16px', borderRadius: '14px', color: 'white', boxShadow: '0 10px 30px rgba(0,0,0,0.15)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                        <div style={{ background: 'rgba(255,255,255,0.1)', padding: '6px', borderRadius: '8px' }}><TrendingUp size={18} /></div>
+                        <ArrowUpRight size={16} color="#4ade80" />
                     </div>
-                    <div style={{ fontSize: '13px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Custo Líquido Total</div>
-                    <div style={{ fontSize: '28px', fontWeight: '900', margin: '4px 0', letterSpacing: '-0.02em' }}>R$ {stats.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                    <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>Real + Estimado</div>
+                    <div style={{ fontSize: '10px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Custo Líquido Total</div>
+                    <div style={{ fontSize: '18px', fontWeight: '900', margin: '4px 0', letterSpacing: '-0.02em' }}>R$ {stats.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: '9px', color: '#94a3b8', fontWeight: '700' }}>Real + Estimado</div>
                 </div>
 
                 {/* 2. Custo REAL (Finalizado) */}
-                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-                        <div style={{ background: '#dcfce7', padding: '10px', borderRadius: '14px' }}><CheckCircle2 size={24} color="#166534" /></div>
+                <div style={{ background: 'white', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                        <div style={{ background: '#dcfce7', padding: '6px', borderRadius: '8px' }}><CheckCircle2 size={18} color="#166534" /></div>
                     </div>
-                    <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Líquido Real</div>
-                    <div style={{ fontSize: '26px', fontWeight: '900', margin: '4px 0', color: '#166534' }}>R$ {stats.totalRealCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                    <div style={{ fontSize: '11px', color: '#166534', fontWeight: '700' }}>Alocações Finalizadas</div>
+                    <div style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Líquido Real</div>
+                    <div style={{ fontSize: '18px', fontWeight: '900', margin: '4px 0', color: '#166534' }}>R$ {stats.totalRealCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: '9px', color: '#166534', fontWeight: '700' }}>Alocações Finalizadas</div>
                 </div>
 
                 {/* 3. Custo ESTIMADO (Planejamento) */}
-                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-                        <div style={{ background: '#eff6ff', padding: '10px', borderRadius: '14px' }}><Calendar size={24} color="#3b82f6" /></div>
+                <div style={{ background: 'white', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                        <div style={{ background: '#eff6ff', padding: '6px', borderRadius: '8px' }}><Calendar size={18} color="#3b82f6" /></div>
                     </div>
-                    <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Líquido Estimado</div>
-                    <div style={{ fontSize: '26px', fontWeight: '900', margin: '4px 0', color: '#3b82f6' }}>R$ {stats.totalEstimatedCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                    <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: '700' }}>Alocações em Planejamento</div>
+                    <div style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Líquido Estimado</div>
+                    <div style={{ fontSize: '18px', fontWeight: '900', margin: '4px 0', color: '#3b82f6' }}>R$ {stats.totalEstimatedCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: '9px', color: '#3b82f6', fontWeight: '700' }}>Alocações em Planejamento</div>
                 </div>
             </div>
 
             {/* Linha Secundária: Diesel e Chuva */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', marginBottom: '32px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '16px' }}>
                 {/* Custo Diesel */}
-                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-                        <div style={{ background: '#ecfdf5', padding: '10px', borderRadius: '14px' }}><Droplet size={24} color="#10b981" /></div>
+                <div style={{ background: 'white', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                        <div style={{ background: '#ecfdf5', padding: '6px', borderRadius: '8px' }}><Droplet size={18} color="#10b981" /></div>
                     </div>
-                    <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Consumo de Diesel</div>
-                    <div style={{ fontSize: '24px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalFuelCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                    <div style={{ fontSize: '11px', color: '#10b981', fontWeight: '700' }}>Baseado na Cotação Diária</div>
+                    <div style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Consumo de Diesel</div>
+                    <div style={{ fontSize: '18px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalFuelCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: '9px', color: '#10b981', fontWeight: '700' }}>Baseado na Cotação Diária</div>
                 </div>
 
                 {/* Custo Chuva */}
-                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-                        <div style={{ background: '#eff6ff', padding: '10px', borderRadius: '14px' }}><Droplet size={24} color="#3b82f6" /></div>
+                <div style={{ background: 'white', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                        <div style={{ background: '#eff6ff', padding: '6px', borderRadius: '8px' }}><Droplet size={18} color="#3b82f6" /></div>
                     </div>
-                    <div style={{ fontSize: '12px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Improd. Climática (Chuvas)</div>
-                    <div style={{ fontSize: '24px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalRainCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    <div style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Custo Improd. Climática (Chuvas)</div>
+                    <div style={{ fontSize: '18px', fontWeight: '900', margin: '4px 0', color: '#0f172a' }}>R$ {stats.totalRainCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                 </div>
             </div>
 
             {/* Ranking e Gráfico Pizza */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px', marginBottom: '32px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '16px' }}>
                 {/* Ranking de Custos (com Pátio) */}
-                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-                        <div style={{ background: '#f0f9ff', padding: '8px', borderRadius: '10px', color: '#3b82f6' }}><Building2 size={20} /></div>
-                        <h3 style={{ fontSize: '16px', fontWeight: '900', color: '#1e293b', margin: 0 }}>Ranking de Custos</h3>
+                <div style={{ background: 'white', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                        <div style={{ background: '#f0f9ff', padding: '5px', borderRadius: '6px', color: '#3b82f6' }}><Building2 size={16} /></div>
+                        <h3 style={{ fontSize: '13px', fontWeight: '900', color: '#1e293b', margin: 0 }}>Ranking de Custos</h3>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '300px', overflowY: 'auto' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '300px', overflowY: 'auto' }}>
                         {stats.rankingData.map((item, index) => (
-                            <div key={index} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: '10px', background: index === 0 ? '#f8fafc' : 'transparent', border: index === 0 ? '1px solid #e2e8f0' : 'none' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                    <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: index === 0 ? '#fbbf24' : index === 1 ? '#94a3b8' : index === 2 ? '#b45309' : '#e2e8f0', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: '800' }}>
+                            <div key={index} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px', borderRadius: '8px', background: index === 0 ? '#f8fafc' : 'transparent', border: index === 0 ? '1px solid #e2e8f0' : 'none' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: index === 0 ? '#fbbf24' : index === 1 ? '#94a3b8' : index === 2 ? '#b45309' : '#e2e8f0', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', fontWeight: '800' }}>
                                         {index + 1}
                                     </div>
-                                    <span style={{ fontSize: '13px', fontWeight: '700', color: '#334155' }}>{item.name}</span>
+                                    <span style={{ fontSize: '11px', fontWeight: '700', color: '#334155' }}>{item.name}</span>
                                 </div>
-                                <span style={{ fontSize: '13px', fontWeight: '800', color: '#0f172a' }}>
+                                <span style={{ fontSize: '11px', fontWeight: '800', color: '#0f172a' }}>
                                     R$ {item.value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                 </span>
                             </div>
@@ -815,16 +1058,16 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                 </div>
 
                 {/* Gráfico Pizza */}
-                <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: '900', color: '#1e293b', marginBottom: '16px' }}>Distribuição Percentual</h3>
-                    <div style={{ height: '400px' }}>
+                <div style={{ background: 'white', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
+                    <h3 style={{ fontSize: '13px', fontWeight: '900', color: '#1e293b', marginBottom: '12px' }}>Distribuição Percentual</h3>
+                    <div style={{ height: '220px' }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
-                                <Pie data={stats.pieData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                                <Pie data={stats.pieData} innerRadius={45} outerRadius={65} paddingAngle={5} dataKey="value">
                                     {stats.pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                                 </Pie>
                                 <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} itemSorter={(item) => -(Number(item.value) || 0)} />
-                                <Legend verticalAlign="middle" align="right" layout="vertical" iconType="circle" />
+                                <Legend verticalAlign="middle" align="right" layout="vertical" iconType="circle" wrapperStyle={{ fontSize: '10px' }} />
                             </PieChart>
                         </ResponsiveContainer>
                     </div>
@@ -833,16 +1076,16 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
             {/* Novo Gráfico: Evolução por Obra (MODO MENSAL E ACUMULADOS) */}
             {viewMode !== 'daily' && (
-                <div style={{ background: 'white', padding: '28px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '400px', marginBottom: '32px' }}>
-                    <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '24px' }}>Evolução de Custos por Obra</h3>
-                    <div style={{ height: '400px' }}>
+                <div style={{ background: 'white', padding: '16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '300px', marginBottom: '16px' }}>
+                    <h3 style={{ fontSize: '14px', fontWeight: '800', color: '#1e293b', marginBottom: '12px' }}>Evolução de Custos por Obra</h3>
+                    <div style={{ height: '260px' }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <LineChart data={stats.worksiteDailyData}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} dy={10} />
-                                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
+                                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} dy={10} />
+                                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
                                 <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} itemSorter={(item) => -(Number(item.value) || 0)} />
-                                <Legend />
+                                <Legend wrapperStyle={{ fontSize: '10px' }} />
                                 {worksites
                                     .filter(w => stats.rankingData.some(r => r.name === w.name))
                                     .map((w, idx) => {
@@ -853,7 +1096,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                                 type="monotone"
                                                 dataKey={w.name}
                                                 stroke={color}
-                                                strokeWidth={3}
+                                                strokeWidth={2}
                                                 dot={false}
                                             />
                                         );
@@ -861,9 +1104,9 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
                                 {/* Linha do Pátio Opcional */}
                                 {stats.rankingData.some(r => r.name === 'Pátio (Ociosidade)') && (
-                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="5 5" dot={false} />
                                 )}
-                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={2} strokeDasharray="3 3" dot={false} name="Chuva" />
+                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="3 3" dot={false} name="Chuva" />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
@@ -872,17 +1115,17 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
             {/* Novo Gráfico: Evolução de Custos Acumulados */}
             {viewMode !== 'daily' && (
-                <div style={{ background: 'white', padding: '28px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '400px', marginBottom: '32px' }}>
-                    <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '8px' }}>Evolução de Custos Acumulados por Obra</h3>
-                    <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '24px' }}>Mostra o crescimento do custo somado a cada dia do período selecionado.</p>
-                    <div style={{ height: '400px' }}>
+                <div style={{ background: 'white', padding: '16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', minHeight: '300px', marginBottom: '16px' }}>
+                    <h3 style={{ fontSize: '14px', fontWeight: '800', color: '#1e293b', marginBottom: '4px' }}>Evolução de Custos Acumulados por Obra</h3>
+                    <p style={{ fontSize: '10px', color: '#64748b', marginBottom: '12px' }}>Mostra o crescimento do custo somado a cada dia do período selecionado.</p>
+                    <div style={{ height: '260px' }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <LineChart data={stats.worksiteCumulativeData}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} dy={10} />
-                                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
+                                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} dy={10} />
+                                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
                                 <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} itemSorter={(item) => -(Number(item.value) || 0)} />
-                                <Legend />
+                                <Legend wrapperStyle={{ fontSize: '10px' }} />
                                 {worksites
                                     .filter(w => stats.rankingData.some(r => r.name === w.name))
                                     .map((w, idx) => {
@@ -893,16 +1136,16 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                                 type="monotone"
                                                 dataKey={w.name}
                                                 stroke={color}
-                                                strokeWidth={3}
+                                                strokeWidth={2}
                                                 dot={false}
                                             />
                                         );
                                     })}
                                 {/* Linha do Pátio Opcional */}
                                 {stats.rankingData.some(r => r.name === 'Pátio (Ociosidade)') && (
-                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="5 5" dot={false} />
                                 )}
-                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={2} strokeDasharray="3 3" dot={false} name="Chuva" />
+                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="3 3" dot={false} name="Chuva" />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
@@ -911,27 +1154,27 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
 
 
             {/* Alertas (Apenas Ociosidade, Manutenção removido) */}
-            <div style={{ marginTop: '32px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px' }}>
+            <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
                 {/* Ociosidade */}
-                <div style={{ background: '#fff1f2', padding: '24px', borderRadius: '24px', border: '1px solid #fecdd3' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-                        <div style={{ background: '#fecdd3', padding: '8px', borderRadius: '10px', color: '#be123c' }}><AlertTriangle size={20} /></div>
-                        <h3 style={{ fontSize: '16px', fontWeight: '900', color: '#881337', margin: 0 }}>Recursos com Maior Ociosidade</h3>
+                <div style={{ background: '#fff1f2', padding: '12px 16px', borderRadius: '14px', border: '1px solid #fecdd3' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                        <div style={{ background: '#fecdd3', padding: '5px', borderRadius: '6px', color: '#be123c' }}><AlertTriangle size={16} /></div>
+                        <h3 style={{ fontSize: '13px', fontWeight: '900', color: '#881337', margin: 0 }}>Recursos com Maior Ociosidade</h3>
                     </div>
-                    <div style={{ marginBottom: '12px', fontSize: '11px', color: '#9f1239', opacity: 0.8 }}>
+                    <div style={{ marginBottom: '8px', fontSize: '10px', color: '#9f1239', opacity: 0.8 }}>
                         * Contabiliza apenas dias úteis com status "Alocação Final". Recursos em manutenção não contam.
                     </div>
                     {stats.idleResources.length > 0 ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '300px', overflowY: 'auto' }}>
                             {stats.idleResources.map((res, idx) => (
-                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(255,255,255,0.6)', borderRadius: '12px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                        <span style={{ fontSize: '14px', fontWeight: '700', color: '#9f1239' }}>{res.name}</span>
-                                        <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: res.type === 'machine' ? '#fcd34d' : '#bae6fd', color: res.type === 'machine' ? '#92400e' : '#0369a1', fontWeight: '800' }}>
+                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'rgba(255,255,255,0.6)', borderRadius: '8px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#9f1239' }}>{res.name}</span>
+                                        <span style={{ fontSize: '9px', padding: '2px 4px', borderRadius: '4px', background: res.type === 'machine' ? '#fcd34d' : '#bae6fd', color: res.type === 'machine' ? '#92400e' : '#0369a1', fontWeight: '800' }}>
                                             {res.type === 'machine' ? 'MQ' : 'FUNC'}
                                         </span>
                                     </div>
-                                    <div style={{ fontSize: '13px', fontWeight: '800', color: '#be123c' }}>{res.days} dias parado</div>
+                                    <div style={{ fontSize: '11px', fontWeight: '800', color: '#be123c' }}>{res.days} dias parado</div>
                                 </div>
                             ))}
                         </div>
@@ -942,23 +1185,23 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
             </div>
 
             {/* Histórico de Manutenção Consolidado */}
-            <div style={{ background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', marginTop: '32px', gridColumn: '1 / -1' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-                    <div style={{ background: '#fff7ed', padding: '8px', borderRadius: '12px' }}>
-                        <Tractor size={20} color="#ea580c" />
+            <div style={{ background: 'white', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', marginTop: '16px', gridColumn: '1 / -1' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                    <div style={{ background: '#fff7ed', padding: '5px', borderRadius: '8px' }}>
+                        <Tractor size={16} color="#ea580c" />
                     </div>
-                    <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#1e293b' }}>Histórico de Manutenção e Indisponibilidade</h3>
+                    <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#1e293b', margin: 0 }}>Histórico de Manutenção e Indisponibilidade</h3>
                 </div>
 
-                <div style={{ overflowX: 'auto', maxHeight: viewMode === 'monthly' ? '800px' : '400px', overflowY: 'auto' }}>
+                <div style={{ overflowX: 'auto', maxHeight: viewMode === 'monthly' ? '400px' : '260px', overflowY: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
                             <tr style={{ borderBottom: '2px solid #f1f5f9' }}>
-                                <th style={{ textAlign: 'left', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>MÁQUINA</th>
-                                <th style={{ textAlign: 'center', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>PERÍODO INDISPONÍVEL</th>
-                                <th style={{ textAlign: 'center', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>CUSTO INDISP.</th>
-                                <th style={{ textAlign: 'center', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>IMPACTO (DIAS ÚTEIS)</th>
-                                <th style={{ textAlign: 'left', padding: '12px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>MOTIVO REGISTRADO</th>
+                                <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: '10px', fontWeight: 700, color: '#64748b' }}>MÁQUINA</th>
+                                <th style={{ textAlign: 'center', padding: '6px 8px', fontSize: '10px', fontWeight: 700, color: '#64748b' }}>PERÍODO INDISPONÍVEL</th>
+                                <th style={{ textAlign: 'center', padding: '6px 8px', fontSize: '10px', fontWeight: 700, color: '#64748b' }}>CUSTO INDISP.</th>
+                                <th style={{ textAlign: 'center', padding: '6px 8px', fontSize: '10px', fontWeight: 700, color: '#64748b' }}>IMPACTO (DIAS ÚTEIS)</th>
+                                <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: '10px', fontWeight: 700, color: '#64748b' }}>MOTIVO REGISTRADO</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -967,36 +1210,36 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                 if (!res) return null;
                                 return (
                                     <tr key={idx} style={{ borderBottom: '1px solid #f8fafc' }}>
-                                        <td style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <td style={{ padding: '6px 8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                                             {res.photo ? (
-                                                <img src={res.photo} alt={res.name} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} />
+                                                <img src={res.photo} alt={res.name} style={{ width: '22px', height: '22px', borderRadius: '50%', objectFit: 'cover' }} />
                                             ) : (
-                                                <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🚜</div>
+                                                <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px' }}>🚜</div>
                                             )}
-                                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#1e293b' }}>{res.name}</div>
+                                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#1e293b' }}>{res.name}</div>
                                         </td>
-                                        <td style={{ padding: '12px', textAlign: 'center', fontSize: '13px', color: '#64748b' }}>
+                                        <td style={{ padding: '6px 8px', textAlign: 'center', fontSize: '11px', color: '#64748b' }}>
                                             {format(parseISO(entry.start), 'dd/MM')} até {format(parseISO(entry.end), 'dd/MM')}
                                         </td>
-                                        <td style={{ padding: '12px', textAlign: 'center' }}>
+                                        <td style={{ padding: '6px 8px', textAlign: 'center' }}>
                                             <span style={{
                                                 background: '#fff7ed',
                                                 color: '#c2410c',
-                                                padding: '4px 10px',
-                                                borderRadius: '8px',
-                                                fontSize: '12px',
+                                                padding: '2px 6px',
+                                                borderRadius: '6px',
+                                                fontSize: '10px',
                                                 fontWeight: '800',
                                                 border: '1px solid #ffedd5'
                                             }}>
                                                 R$ {entry.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                             </span>
                                         </td>
-                                        <td style={{ padding: '12px', textAlign: 'center' }}>
-                                            <span style={{ background: '#f1f5f9', color: '#64748b', padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '800' }}>
+                                        <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                                            <span style={{ background: '#f1f5f9', color: '#64748b', padding: '2px 6px', borderRadius: '10px', fontSize: '10px', fontWeight: '800' }}>
                                                 {entry.days} dias alocados
                                             </span>
                                         </td>
-                                        <td style={{ padding: '12px', fontSize: '13px', color: '#64748b', fontStyle: 'italic' }}>
+                                        <td style={{ padding: '6px 8px', fontSize: '11px', color: '#64748b', fontStyle: 'italic' }}>
                                             {entry.reason}
                                         </td>
                                     </tr>
@@ -1004,7 +1247,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                             })}
                             {stats.maintenanceIntervals.length === 0 && (
                                 <tr>
-                                    <td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic', fontSize: '13px' }}>
+                                    <td colSpan={5} style={{ padding: '20px', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic', fontSize: '11px' }}>
                                         Nenhum registro de manutenção encontrado.
                                     </td>
                                 </tr>
