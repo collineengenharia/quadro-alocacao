@@ -1348,12 +1348,18 @@ function App() {
 
           // Obras individuais
           const containers = grid.querySelectorAll('.obra-container');
+          const numContainers = containers.length;
           containers.forEach((c) => {
             const container = c as HTMLElement;
             originalStyles.set(container, container.getAttribute('style') || '');
-            container.style.setProperty('flex', '1 1 calc(50% - 10px)', 'important');
+            if (numContainers === 1) {
+              container.style.setProperty('flex', '1 1 100%', 'important');
+              container.style.setProperty('max-width', '100%', 'important');
+            } else {
+              container.style.setProperty('flex', '1 1 calc(50% - 10px)', 'important');
+              container.style.setProperty('max-width', 'calc(50% - 10px)', 'important');
+            }
             container.style.setProperty('min-width', '580px', 'important');
-            container.style.setProperty('max-width', 'calc(50% - 10px)', 'important');
             container.style.setProperty('opacity', '1', 'important');
             container.style.setProperty('background', 'white', 'important');
             // Remover sombra para ficar mais clean na impressão
