@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { saveAs } from 'file-saver';
+import * as XLSX from 'xlsx';
 import { supabase } from './lib/supabase';
 import { useAuth } from './contexts/AuthContext';
 import { ResourceSettings } from './components/ResourceSettings';
@@ -444,6 +445,8 @@ function App() {
   const boardRef = useRef<HTMLDivElement>(null);
 
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   // === CARREGAR DADOS DO SUPABASE ===
   useEffect(() => {
@@ -459,6 +462,9 @@ function App() {
 
         if (error) {
           console.error('Erro ao carregar do Supabase:', error);
+          if (error.code !== 'PGRST116') {
+            throw error;
+          }
         }
 
         if (data?.state) {
@@ -476,8 +482,11 @@ function App() {
           if (s.partialAllocations) setPartialAllocations(s.partialAllocations);
           if (s.fuelData) setFuelData(s.fuelData);
           if (s.fuelQuotes) setFuelQuotes(s.fuelQuotes);
+          
+          setDataLoaded(true);
+          setLoadError(null);
         } else {
-          // Usuário novo: carregar dados do localStorage como migração
+          // Usuário novo ou sem dados no banco: carregar dados do localStorage como migração
           try {
             const savedResources = localStorage.getItem('colline_resources');
             const savedWorksites = localStorage.getItem('colline_worksites');
@@ -508,11 +517,13 @@ function App() {
           } catch (localErr) {
             console.error('Erro ao carregar do localStorage:', localErr);
           }
+          
+          setDataLoaded(true);
+          setLoadError(null);
         }
       } catch (err) {
         console.error('Erro geral ao carregar dados:', err);
-      } finally {
-        setDataLoaded(true);
+        setLoadError('Erro ao carregar os dados do servidor. Por segurança, o salvamento automático está desativado para evitar sobrescrever seu quadro de alocações. Verifique sua conexão com a internet.');
       }
     };
 
@@ -687,6 +698,83 @@ function App() {
     }
 
     setWorksites(worksites.map(w => w.id === id ? { ...w, name: trimmed } : w));
+  };
+
+  const handleMergeWorksites = (sourceIds: string[], targetId: string) => {
+    if (!targetId || !sourceIds || sourceIds.length === 0) return;
+
+    // 1. Atualizar a lista de obras (remover as de origem)
+    setWorksites(prev => prev.filter(w => !sourceIds.includes(w.id)));
+
+    // 2. Atualizar as alocações principais em allocations
+    setAllocations(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(date => {
+        const dayAllocs = { ...updated[date] };
+        let changed = false;
+        Object.keys(dayAllocs).forEach(resId => {
+          if (sourceIds.includes(dayAllocs[resId])) {
+            dayAllocs[resId] = targetId;
+            changed = true;
+          }
+        });
+        if (changed) {
+          updated[date] = dayAllocs;
+        }
+      });
+      return updated;
+    });
+
+    // 3. Atualizar alocações parciais em partialAllocations
+    setPartialAllocations(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(date => {
+        const dayPartials = { ...updated[date] };
+        let changed = false;
+        Object.keys(dayPartials).forEach(resId => {
+          if (dayPartials[resId]) {
+            const list = dayPartials[resId].map(p => {
+              if (sourceIds.includes(p.worksiteId)) {
+                return { ...p, worksiteId: targetId };
+              }
+              return p;
+            });
+            dayPartials[resId] = list;
+            changed = true;
+          }
+        });
+        if (changed) {
+          updated[date] = dayPartials;
+        }
+      });
+      return updated;
+    });
+
+    // 4. Concatenar observações em observations
+    setObservations(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(date => {
+        const dayObs = { ...updated[date] };
+        let targetObs = dayObs[targetId] || '';
+        const obsToConcat: string[] = [];
+        sourceIds.forEach(srcId => {
+          if (dayObs[srcId]) {
+            obsToConcat.push(dayObs[srcId]);
+            delete dayObs[srcId];
+          }
+        });
+        if (obsToConcat.length > 0) {
+          if (targetObs) {
+            targetObs += '\n' + obsToConcat.join('\n');
+          } else {
+            targetObs = obsToConcat.join('\n');
+          }
+          dayObs[targetId] = targetObs;
+          updated[date] = dayObs;
+        }
+      });
+      return updated;
+    });
   };
 
   const handleToggleWorksiteVisibility = (id: string) => {
@@ -1537,6 +1625,10 @@ function App() {
             setMaintenanceHistory(data.maintenanceHistory || {});
             setOvertime(data.overtime || {});
             setPartialAllocations(data.partialAllocations || {});
+            
+            // Permite o salvamento automático imediato das informações restauradas no banco de dados
+            setDataLoaded(true);
+            setLoadError(null);
           }
         } else {
           alert("Arquivo inválido ou corrompido.");
@@ -1548,8 +1640,645 @@ function App() {
     reader.readAsText(file);
   };
 
+  const handleImportExcel = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        
+        // Converte a planilha para uma matriz de linhas (vetor de vetores)
+        const rows = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
+        
+        if (rows.length < 2) {
+          alert("A planilha está vazia ou não possui dados suficientes.");
+          return;
+        }
+        
+        // Varredura para encontrar a linha de cabeçalho (pode estar na linha 1 ou 2)
+        let headerRowIdx = -1;
+        let headers: string[] = [];
+        for (let rIdx = 0; rIdx < Math.min(rows.length, 15); rIdx++) {
+          const row = rows[rIdx];
+          if (row && row.length > 0) {
+            const potentialHeaders = row.map(h => h !== undefined && h !== null ? String(h).trim().toUpperCase() : '');
+            // Verifica se a linha contém as colunas obrigatórias principais
+            if (
+              potentialHeaders.some(h => h === 'DATA') &&
+              potentialHeaders.some(h => h === 'NOME' || h === 'FUNCIONÁRIO' || h === 'FUNCIONARIO' || h === 'OPERADOR') &&
+              potentialHeaders.some(h => h === 'OBRA' || h === 'LOCAL' || h === 'DESTINO')
+            ) {
+              headerRowIdx = rIdx;
+              headers = potentialHeaders;
+              break;
+            }
+          }
+        }
+        
+        if (headerRowIdx === -1) {
+          alert("Colunas obrigatórias 'DATA', 'NOME' e 'OBRA' não foram encontradas nas primeiras 15 linhas da planilha.");
+          return;
+        }
+        
+        // Identificar os índices das colunas de forma flexível (suporta variações)
+        const colDataIdx = headers.indexOf('DATA');
+        
+        const colHorasIdx1 = headers.indexOf('HORAS TRABALHADAS');
+        const colHorasIdx2 = headers.indexOf('HORAS TRABALHADA');
+        const colHorasIdx3 = headers.indexOf('HORAS');
+        const colHorasIdx4 = headers.indexOf('HORAS TRAB');
+        const colHoras = colHorasIdx1 !== -1 ? colHorasIdx1 : (colHorasIdx2 !== -1 ? colHorasIdx2 : (colHorasIdx3 !== -1 ? colHorasIdx3 : colHorasIdx4));
+        
+        const colNomeIdx1 = headers.indexOf('NOME');
+        const colNomeIdx2 = headers.indexOf('FUNCIONÁRIO');
+        const colNomeIdx3 = headers.indexOf('FUNCIONARIO');
+        const colNomeIdx4 = headers.indexOf('OPERADOR');
+        const colNomeIdx = colNomeIdx1 !== -1 ? colNomeIdx1 : (colNomeIdx2 !== -1 ? colNomeIdx2 : (colNomeIdx3 !== -1 ? colNomeIdx3 : colNomeIdx4));
+        
+        const colFuncaoIdx1 = headers.indexOf('FUNÇÃO');
+        const colFuncaoIdx2 = headers.indexOf('FUNCAO');
+        const colFuncaoIdx3 = headers.indexOf('CARGO');
+        const colFuncao = colFuncaoIdx1 !== -1 ? colFuncaoIdx1 : (colFuncaoIdx2 !== -1 ? colFuncaoIdx2 : colFuncaoIdx3);
+        
+        const colEquipamentoIdx1 = headers.indexOf('EQUIPAMENTO');
+        const colEquipamentoIdx2 = headers.indexOf('MÁQUINA');
+        const colEquipamentoIdx3 = headers.indexOf('MAQUINA');
+        const colEquipamentoIdx = colEquipamentoIdx1 !== -1 ? colEquipamentoIdx1 : (colEquipamentoIdx2 !== -1 ? colEquipamentoIdx2 : colEquipamentoIdx3);
+        
+        const colObraIdx1 = headers.indexOf('OBRA');
+        const colObraIdx2 = headers.indexOf('LOCAL');
+        const colObraIdx3 = headers.indexOf('DESTINO');
+        const colObraIdx = colObraIdx1 !== -1 ? colObraIdx1 : (colObraIdx2 !== -1 ? colObraIdx2 : colObraIdx3);
+        
+        const colObservacaoIdx1 = headers.indexOf('OBSERVAÇÃO');
+        const colObservacaoIdx2 = headers.indexOf('OBSERVACAO');
+        const colObservacaoIdx3 = headers.indexOf('OBS');
+        const colObservacao = colObservacaoIdx1 !== -1 ? colObservacaoIdx1 : (colObservacaoIdx2 !== -1 ? colObservacaoIdx2 : colObservacaoIdx3);
+        
+        // Mapear coluna de custos
+        const colCustoIdx1 = headers.indexOf('CUSTO');
+        const colCustoIdx2 = headers.indexOf('CUSTO DIA');
+        const colCustoIdx3 = headers.indexOf('VALOR DIA');
+        const colCustoIdx4 = headers.indexOf('VALOR');
+        const colCustoIdx = colCustoIdx1 !== -1 ? colCustoIdx1 : (colCustoIdx2 !== -1 ? colCustoIdx2 : (colCustoIdx3 !== -1 ? colCustoIdx3 : colCustoIdx4));
+
+        if (colDataIdx === -1 || colNomeIdx === -1 || colObraIdx === -1) {
+          alert("Colunas obrigatórias 'DATA', 'NOME' e 'OBRA' não foram encontradas na planilha.");
+          return;
+        }
+        
+        // Cópias do estado para manipulação segura
+        const updatedResources = [...resources];
+        const updatedWorksites = [...worksites];
+        const updatedAllocations = { ...allocations };
+        const updatedObservations = { ...observations };
+        const updatedResourceLinks = { ...resourceLinks };
+        const updatedPartialAllocations = { ...partialAllocations };
+        
+        // Tabela de Diárias Fixas de Equipamentos (Máquinas)
+        const MACHINE_COSTS: { [name: string]: number } = {
+          'PC200 001': 2800,
+          'PC200 OO2E': 2800,
+          'ESCAVADEIRA': 2800,
+          'TRATOR': 900,
+          'RETRO CAT': 1500,
+          'CAMINHÃO BASCULANTE': 1200,
+          'CAMINHÃO PIPA': 400,
+          'PIPA': 400,
+          'FORD F. 4000': 400,
+          'ACABADORA': 2800,
+          'ESPARGIDOR': 1800,
+          'PATROL': 2800,
+          'ROLO PÉ DE CARNEIRO': 1600
+        };
+
+        // Tabela de Diárias Fixas de Funcionários
+        const OFFICIAL_EMPLOYEE_COSTS: { [name: string]: number } = {
+          'AGNALDO NUNES': 416.10,
+          'ANTONIO PEREIRA MELO': 395.61,
+          'ASSIS FRANCISCO DA SILVA': 390.61,
+          'EDMILSON NELSON DA SILVA': 480.50,
+          'LEONARDO GONÇALVES': 470.00,
+          'EVERALDO NUNES DA CONCEIÇÃO': 337.83,
+          'JOÃO BATISTA DE CARVALHO': 355.02,
+          'JOÃO PIRES': 331.25,
+          'JOÃO MANOEL DA SILVA': 314.16,
+          'JOSE ANTONIO FERREIRA FILHO': 407.99,
+          'MIGUEL PEREIRA TEIXEIRA': 398.40,
+          'RAIMUNDO NONATO MARINHO DE LIMA': 265.00,
+          'VANDERLEI DOS REIS HENRIQUE': 339.55,
+          'ANTONIO CARLOS COLOMBO': 287.78,
+          'VAGNER DE SOUSA VIEIRA': 146.76,
+          'ROMIZIO FRANCISCO DOS SANTOS': 314.16,
+          'GENILDO JOVENTINO DOS SANTOS': 272.91,
+          'FRANCISCO PAULINO DE OLIVEIRA': 272.91
+        };
+
+        // Helper para tratar custos em formato de moeda ou numérico de forma segura
+        const parseExcelCost = (val: any): number => {
+          if (val === undefined || val === null) return 0;
+          if (typeof val === 'number') {
+            return val;
+          }
+          try {
+            let s = String(val).replace('R$', '').trim();
+            if (s.includes('.') && s.includes(',')) {
+              s = s.replace(/\./g, '').replace(',', '.');
+            } else if (s.includes(',')) {
+              s = s.replace(',', '.');
+            }
+            const num = parseFloat(s);
+            return isNaN(num) ? 0 : num;
+          } catch (e) {
+            return 0;
+          }
+        };
+
+        // Helper para normalizar nome de funcionários
+        const cleanEmployeeName = (name: string): string => {
+          let n = name.trim().toUpperCase().replace(/\s+/g, ' ');
+          if (n === 'FRANCISCO') {
+            return 'FRANCISCO PAULINO DE OLIVEIRA';
+          }
+          if (n === 'WAGNER DE SOUSA VIEIRA') {
+            return 'VAGNER DE SOUSA VIEIRA';
+          }
+          if (n === 'ZENILDO JOVENTINO DOS SANTOS') {
+            return 'GENILDO JOVENTINO DOS SANTOS';
+          }
+          return n;
+        };
+
+        // Helper para normalizar nome de máquinas
+        const cleanMachineName = (name: string): string => {
+          let n = name.trim().toUpperCase().replace(/\s+/g, ' ');
+          if (n === 'ESCAVADEIRA ANTIGA') {
+            return 'PC200 001';
+          }
+          if (n === 'ESCAVADEIRA NOVA' || n === 'PC200 002E' || n === 'PC200 002 E' || n === 'PC200 OO2 E') {
+            return 'PC200 OO2E';
+          }
+          if (n === 'ASPARGIDOR') {
+            return 'ESPARGIDOR';
+          }
+          return n;
+        };
+
+        // Helper para buscar ou criar funcionário
+        const findOrCreateEmployee = (name: string, role: string, rowCost: number) => {
+          const mappedName = cleanEmployeeName(name);
+          let emp = updatedResources.find(r => r.type === 'employee' && cleanEmployeeName(r.name) === mappedName);
+          
+          const officialCost = OFFICIAL_EMPLOYEE_COSTS[mappedName];
+          let finalCost = officialCost !== undefined ? officialCost : rowCost;
+
+          if (!emp) {
+            emp = {
+              id: 'res-' + Date.now() + '-' + Math.random().toString().slice(2, 10),
+              name: mappedName,
+              type: 'employee',
+              role: role ? role.trim() : 'Operador',
+              photo: `https://via.placeholder.com/150?text=${mappedName.charAt(0)}`,
+              costPerDay: finalCost
+            };
+            updatedResources.push(emp);
+          } else {
+            emp.name = mappedName;
+            if (role) emp.role = role.trim();
+            if (officialCost !== undefined) {
+              emp.costPerDay = officialCost;
+            } else if (finalCost > 0) {
+              emp.costPerDay = finalCost;
+            }
+          }
+          return emp;
+        };
+        
+        // Helper para buscar ou criar equipamento (máquina)
+        const findOrCreateMachine = (name: string) => {
+          const mappedName = cleanMachineName(name);
+          let machine = updatedResources.find(r => r.type === 'machine' && cleanMachineName(r.name) === mappedName);
+          
+          // Custos de máquina vêm da tabela fixa de custos de máquina
+          const finalCost = MACHINE_COSTS[mappedName] || 0;
+
+          if (!machine) {
+            machine = {
+              id: 'res-' + Date.now() + '-' + Math.random().toString().slice(2, 10),
+              name: mappedName,
+              type: 'machine',
+              role: 'Equipamento',
+              photo: `https://via.placeholder.com/150?text=🚜`,
+              costPerDay: finalCost
+            };
+            updatedResources.push(machine);
+          } else {
+            machine.name = mappedName;
+            if (finalCost > 0) {
+              machine.costPerDay = finalCost;
+            }
+          }
+          return machine;
+        };
+        
+        // Helper para buscar ou criar obra
+        const findOrCreateWorksite = (name: string) => {
+          const cleanName = name.trim().toUpperCase();
+          if (cleanName === 'PÁTEO' || cleanName === 'PATEO' || cleanName === 'PATIO') {
+            return { id: 'pateo', name: 'PÁTEO' };
+          }
+          if (cleanName === 'CHUVA') {
+            let site = updatedWorksites.find(w => w.name.toUpperCase().trim() === 'CHUVA' || w.id === 'chuva');
+            if (!site) {
+              site = {
+                id: 'chuva',
+                name: 'CHUVA',
+                color: 'obra-1',
+                visible: true
+              };
+              updatedWorksites.push(site);
+            }
+            return site;
+          }
+          
+          let site = updatedWorksites.find(w => w.name.toUpperCase().trim() === cleanName);
+          if (!site) {
+            const newId = 'obra-' + Date.now() + '-' + Math.random().toString().slice(2, 10);
+            const colors = ['obra-1', 'obra-2', 'obra-3', 'obra-4', 'obra-5'];
+            const randomColor = colors[Math.floor(Math.random() * colors.length)];
+            site = {
+              id: newId,
+              name: name.trim().toUpperCase(),
+              color: randomColor,
+              visible: true
+            };
+            updatedWorksites.push(site);
+          }
+          return site;
+        };
+        
+        // Processar todas as linhas primeiro
+        const parsedRows: Array<{
+          dateKey: string;
+          employeeName: string;
+          role: string;
+          machineName: string;
+          worksiteName: string;
+          hours: number;
+          observation: string;
+          rowCost: number;
+        }> = [];
+        
+        for (let i = headerRowIdx + 1; i < rows.length; i++) {
+          const r = rows[i];
+          if (!r || r.length === 0) continue;
+          
+          const rawDataVal = r[colDataIdx];
+          if (!rawDataVal) continue;
+          
+          let dateKey = '';
+          
+          // Tratar formatos de data
+          if (typeof rawDataVal === 'number') {
+            // Data serial do Excel
+            const date = new Date(Math.round((rawDataVal - 25569) * 86400 * 1000));
+            const tzOffset = date.getTimezoneOffset() * 60000;
+            const localDate = new Date(date.getTime() + tzOffset);
+            dateKey = format(localDate, 'yyyy-MM-dd');
+          } else {
+            // String (DD/MM/YYYY ou YYYY-MM-DD)
+            const dateStr = String(rawDataVal).trim();
+            if (dateStr.includes('/')) {
+              const parts = dateStr.split('/');
+              if (parts.length === 3) {
+                const day = parts[0].padStart(2, '0');
+                const month = parts[1].padStart(2, '0');
+                const year = parts[2];
+                dateKey = `${year}-${month}-${day}`;
+              }
+            } else if (dateStr.includes('-')) {
+              const parts = dateStr.split('-');
+              if (parts.length === 3) {
+                if (parts[0].length === 4) {
+                  dateKey = dateStr;
+                } else {
+                  const day = parts[0].padStart(2, '0');
+                  const month = parts[1].padStart(2, '0');
+                  const year = parts[2];
+                  dateKey = `${year}-${month}-${day}`;
+                }
+              }
+            }
+          }
+          
+          if (!dateKey || dateKey.length !== 10 || isNaN(Date.parse(dateKey))) {
+            console.warn(`Data inválida na linha ${i}:`, rawDataVal);
+            continue;
+          }
+          
+          const rawNome = r[colNomeIdx];
+          if (!rawNome) continue;
+          
+          const employeeName = String(rawNome).trim();
+          const role = colFuncao !== -1 && r[colFuncao] ? String(r[colFuncao]).trim() : '';
+          const machineName = colEquipamentoIdx !== -1 && r[colEquipamentoIdx] ? String(r[colEquipamentoIdx]).trim() : '';
+          const worksiteName = r[colObraIdx] ? String(r[colObraIdx]).trim() : 'PÁTEO';
+          
+          let hours = 9; // Horário padrão
+          if (colHoras !== -1 && r[colHoras] !== undefined) {
+            const hVal = parseFloat(r[colHoras]);
+            if (!isNaN(hVal)) {
+              hours = hVal;
+            }
+          }
+          
+          const observation = colObservacao !== -1 && r[colObservacao] ? String(r[colObservacao]).trim() : '';
+          
+          // Mapear custo da linha
+          let rowCost = 0;
+          if (colCustoIdx !== -1 && r[colCustoIdx] !== undefined && r[colCustoIdx] !== null) {
+            rowCost = parseExcelCost(r[colCustoIdx]);
+          }
+
+          // Regra Especial de Chuva: Obra PÁTEO e Observação CHUVA -> Realoca para a obra CHUVA
+          let finalWorksiteName = worksiteName;
+          const cleanObra = worksiteName.trim().toUpperCase();
+          const cleanObs = observation.trim().toUpperCase();
+          if ((cleanObra === 'PÁTEO' || cleanObra === 'PATEO' || cleanObra === 'PATIO') && cleanObs === 'CHUVA') {
+            finalWorksiteName = 'CHUVA';
+          }
+          
+          parsedRows.push({
+            dateKey,
+            employeeName,
+            role,
+            machineName,
+            worksiteName: finalWorksiteName,
+            hours,
+            observation,
+            rowCost
+          });
+        }
+        
+        if (parsedRows.length === 0) {
+          alert("Nenhuma alocação válida encontrada na planilha.");
+          return;
+        }
+        
+        // Agrupar linhas por data
+        const groupedByDate: { [dateKey: string]: typeof parsedRows } = {};
+        for (const prow of parsedRows) {
+          if (!groupedByDate[prow.dateKey]) {
+            groupedByDate[prow.dateKey] = [];
+          }
+          groupedByDate[prow.dateKey].push(prow);
+        }
+        
+        // Processar alocações dia por dia
+        for (const dateKey of Object.keys(groupedByDate)) {
+          const dateRows = groupedByDate[dateKey];
+          
+          // Sobrescrever: limpar tudo o que existia nesta data específica
+          updatedAllocations[dateKey] = {};
+          updatedObservations[dateKey] = {};
+          updatedResourceLinks[dateKey] = {};
+          updatedPartialAllocations[dateKey] = {};
+          
+          // Agrupar as linhas do dia por funcionário
+          const groupedByEmployee: { [empName: string]: typeof dateRows } = {};
+          for (const drow of dateRows) {
+            const cleanEmpName = drow.employeeName.toUpperCase();
+            if (!groupedByEmployee[cleanEmpName]) {
+              groupedByEmployee[cleanEmpName] = [];
+            }
+            groupedByEmployee[cleanEmpName].push(drow);
+          }
+          
+          for (const empName of Object.keys(groupedByEmployee)) {
+            const empRows = groupedByEmployee[empName];
+            const firstRow = empRows[0];
+            
+            // O custo da planilha pertence sempre ao Funcionário (operador)
+            const emp = findOrCreateEmployee(firstRow.employeeName, firstRow.role, firstRow.rowCost);
+            
+            // Verifica se o funcionário possui horas divididas (mais de 1 linha ou horas diferentes de 9)
+            const isSplit = empRows.length > 1 || empRows.some(row => row.hours !== 9);
+            
+            const matchedRowsInfo = empRows.map(row => {
+              const site = findOrCreateWorksite(row.worksiteName);
+              let machine = null;
+              if (row.machineName) {
+                // Cria ou busca a máquina com o seu custo fixo tabelado
+                machine = findOrCreateMachine(row.machineName);
+                // Vincula equipamento -> operador na data correspondente
+                updatedResourceLinks[dateKey][machine.id] = emp.id;
+              }
+              return { row, site, machine };
+            });
+            
+            if (!isSplit) {
+              // Alocação padrão de dia inteiro (9 horas)
+              const { site, machine } = matchedRowsInfo[0];
+              updatedAllocations[dateKey][emp.id] = site.id;
+              
+              if (machine) {
+                updatedAllocations[dateKey][machine.id] = site.id;
+              }
+              
+              // Observação
+              const obs = matchedRowsInfo[0].row.observation;
+              if (obs) {
+                const currentObs = updatedObservations[dateKey][site.id] || '';
+                if (!currentObs.includes(obs)) {
+                  updatedObservations[dateKey][site.id] = (currentObs ? currentObs + '\n' + obs : obs).trim();
+                }
+              }
+              
+              // Limpa divisões de horas antigas se existirem
+              if (updatedPartialAllocations[dateKey][emp.id]) {
+                delete updatedPartialAllocations[dateKey][emp.id];
+              }
+              if (machine && updatedPartialAllocations[dateKey][machine.id]) {
+                delete updatedPartialAllocations[dateKey][machine.id];
+              }
+            } else {
+              // Alocação dividida (Parcial)
+              const employeePartials = matchedRowsInfo.map(({ row, site }) => ({
+                resourceId: emp.id,
+                worksiteId: site.id,
+                hours: row.hours
+              }));
+              updatedPartialAllocations[dateKey][emp.id] = employeePartials;
+              
+              // Alocação principal recebe a primeira obra para não ficar órfão
+              updatedAllocations[dateKey][emp.id] = matchedRowsInfo[0].site.id;
+              
+              matchedRowsInfo.forEach(({ row, site, machine }) => {
+                if (machine) {
+                  const machinePartials = [{
+                    resourceId: machine.id,
+                    worksiteId: site.id,
+                    hours: row.hours
+                  }];
+                  
+                  if (!updatedPartialAllocations[dateKey][machine.id]) {
+                    updatedPartialAllocations[dateKey][machine.id] = [];
+                  }
+                  updatedPartialAllocations[dateKey][machine.id].push(...machinePartials);
+                  
+                  updatedAllocations[dateKey][machine.id] = site.id;
+                }
+                
+                // Observação
+                const obs = row.observation;
+                if (obs) {
+                  const currentObs = updatedObservations[dateKey][site.id] || '';
+                  if (!currentObs.includes(obs)) {
+                    updatedObservations[dateKey][site.id] = (currentObs ? currentObs + '\n' + obs : obs).trim();
+                  }
+                }
+              });
+            }
+          }
+        }
+        
+        // === LÓGICA DE DEMISSÃO AUTOMÁTICA (DISMISSED_AT) COM TOLERÂNCIA DE 5 DIAS ===
+        const sortedImportedDates = Object.keys(groupedByDate).sort();
+        if (sortedImportedDates.length > 0) {
+          const firstImportedDateStr = sortedImportedDates[0];
+          const lastImportedDateStr = sortedImportedDates[sortedImportedDates.length - 1];
+          const firstImportedDate = parseISO(firstImportedDateStr);
+          const lastImportedDate = parseISO(lastImportedDateStr);
+          
+          // Intervalo total de dias na planilha importada
+          const sheetIntervalDays = Math.round(Math.abs(lastImportedDate.getTime() - firstImportedDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+          
+          // Mapear a última data de aparição de cada recurso na planilha
+          const lastAppearedDateMap: { [resId: string]: string } = {};
+          
+          for (const dateKey of sortedImportedDates) {
+            const rowsForDate = groupedByDate[dateKey];
+            for (const row of rowsForDate) {
+              const cleanEmp = cleanEmployeeName(row.employeeName);
+              const emp = updatedResources.find(r => r.type === 'employee' && cleanEmployeeName(r.name) === cleanEmp);
+              if (emp) {
+                lastAppearedDateMap[emp.id] = dateKey;
+              }
+              if (row.machineName) {
+                const cleanMac = cleanMachineName(row.machineName);
+                const machine = updatedResources.find(r => r.type === 'machine' && cleanMachineName(r.name) === cleanMac);
+                if (machine) {
+                  lastAppearedDateMap[machine.id] = dateKey;
+                }
+              }
+            }
+          }
+          
+          // Aplicar regras para cada recurso (funcionários e máquinas)
+          for (const res of updatedResources) {
+            const lastAppearedDateStr = lastAppearedDateMap[res.id];
+            
+            if (lastAppearedDateStr) {
+              // O recurso apareceu na planilha importada
+              const lastAppearedDate = parseISO(lastAppearedDateStr);
+              const daysSinceLastAppearance = Math.round(Math.abs(lastImportedDate.getTime() - lastAppearedDate.getTime()) / (1000 * 60 * 60 * 24));
+              
+              // Se a ausência for de 5 dias ou mais em relação ao final da planilha, definimos a demissão para o dia seguinte à última aparição
+              if (daysSinceLastAppearance >= 5) {
+                const nextDayDate = addDays(lastAppearedDate, 1);
+                res.dismissedAt = format(nextDayDate, 'yyyy-MM-dd');
+              } else {
+                // Se ele apareceu no final da planilha (ausência < 5 dias), garantimos que ele continua ativo
+                res.dismissedAt = undefined;
+              }
+            } else {
+              // O recurso NÃO apareceu em nenhum dia da planilha
+              // Só marcamos demissão se a planilha cobrir um período significativo (>= 5 dias)
+              if (sheetIntervalDays >= 5) {
+                // Se ele não tinha data de demissão cadastrada, ou se era posterior ao início do período importado
+                if (!res.dismissedAt || res.dismissedAt >= firstImportedDateStr) {
+                  const nextDayDate = addDays(lastImportedDate, 1);
+                  res.dismissedAt = format(nextDayDate, 'yyyy-MM-dd');
+                }
+              }
+            }
+          }
+        }
+        
+        // Atualiza os estados do React
+        setResources(updatedResources);
+        setWorksites(updatedWorksites);
+        setAllocations(updatedAllocations);
+        setObservations(updatedObservations);
+        setResourceLinks(updatedResourceLinks);
+        setPartialAllocations(updatedPartialAllocations);
+        
+        // Desbloqueia e ativa salvamento imediato no Supabase
+        setDataLoaded(true);
+        setLoadError(null);
+        
+        alert(`Planilha importada com sucesso!\nProcessadas alocações para ${Object.keys(groupedByDate).length} datas diferentes.\nFuncionários/máquinas atualizados no quadro.`);
+        
+      } catch (err: any) {
+        console.error("Erro ao importar planilha:", err);
+        alert(`Erro ao ler a planilha: ${err.message || err}`);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleImportFile = (file: File) => {
+    if (file.name.endsWith('.json')) {
+      handleImportBackup(file);
+    } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+      handleImportExcel(file);
+    } else {
+      alert("Formato de arquivo não suportado. Escolha um arquivo de backup (.json) ou planilha de alocação (.xlsx, .xls).");
+    }
+  };
+
   return (
     <div style={{ minHeight: '100vh', background: '#f1f5f9' }}>
+      {loadError && (
+        <div style={{
+          background: '#fee2e2',
+          borderBottom: '2px solid #fca5a5',
+          color: '#991b1b',
+          padding: '12px 16px',
+          textAlign: 'center',
+          fontWeight: '700',
+          fontSize: '13px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '12px',
+          position: 'sticky',
+          top: 0,
+          zIndex: 100
+        }}>
+          <span>⚠️ {loadError}</span>
+          <button 
+            onClick={() => window.location.reload()} 
+            style={{
+              background: '#b91c1c',
+              color: 'white',
+              border: 'none',
+              padding: '4px 12px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '11px',
+              transition: 'background 0.2s'
+            }}
+            onMouseOver={(e) => e.currentTarget.style.background = '#991b1b'}
+            onMouseOut={(e) => e.currentTarget.style.background = '#b91c1c'}
+          >
+            Recarregar Página
+          </button>
+        </div>
+      )}
       {/* HEADER */}
       <header style={{
         background: 'white',
@@ -1785,15 +2514,26 @@ function App() {
             >
               <Camera size={13} /> Imagem
             </button>
-            <label className="btn btn-success" style={{ fontSize: '11px', padding: '6px 10px', borderRadius: '10px', cursor: 'pointer', margin: 0, display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button
+              onClick={() => setShowImportModal(true)}
+              className="btn btn-success"
+              style={{
+                fontSize: '11px',
+                padding: '6px 10px',
+                borderRadius: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontWeight: '700',
+                cursor: 'pointer',
+                border: 'none',
+                color: 'white',
+                background: '#10b981'
+              }}
+              title="Importar Backup (JSON) ou Planilha Excel (.xlsx, .xls)"
+            >
               <Upload size={13} /> Importar
-              <input
-                type="file"
-                className="hidden"
-                accept=".json"
-                onChange={(e) => e.target.files?.[0] && handleImportBackup(e.target.files[0])}
-              />
-            </label>
+            </button>
             {/* Botão de Logout */}
             <button
               onClick={async () => {
@@ -2074,6 +2814,7 @@ function App() {
             allocationsForDate={currentAllocations}
             resources={resources}
             onClose={() => setShowWorksiteSettings(false)}
+            onMergeWorksites={handleMergeWorksites}
           />
         )
       }
@@ -2131,6 +2872,90 @@ function App() {
             onDelete={handleDeleteHourSplit}
             onClose={() => setShowHourSplitModal(false)}
           />
+        )
+      }
+      {
+        showImportModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(15, 23, 42, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            backdropFilter: 'blur(4px)'
+          }}>
+            <div style={{
+              background: 'white',
+              borderRadius: '16px',
+              padding: '24px',
+              maxWidth: '500px',
+              width: '90%',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a', margin: 0 }}>
+                  📥 Importar Dados / Planilha
+                </h3>
+                <button onClick={() => setShowImportModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}>
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div style={{ fontSize: '13px', color: '#475569', display: 'flex', flexDirection: 'column', gap: '12px', lineHeight: '1.5' }}>
+                <p>Escolha o arquivo para importar no quadro de alocação:</p>
+                
+                <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <strong>1. Planilha de Alocação (.xlsx, .xls)</strong>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#64748b' }}>
+                    Soma as alocações da planilha ao histórico existente (sem apagar outros meses). Deve conter as colunas: <em>DATA, NOME, FUNÇÃO, EQUIPAMENTO, OBRA, OBSERVAÇÃO, HORAS TRABALHADAS</em>.
+                  </p>
+                </div>
+
+                <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <strong>2. Backup Completo (.json)</strong>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#64748b' }}>
+                    Restaura o sistema completo para o estado em que o backup foi gerado.
+                  </p>
+                </div>
+                
+                <div style={{ background: '#eff6ff', padding: '12px', borderRadius: '8px', border: '1px solid #bfdbfe', color: '#1e40af' }}>
+                  <strong>🌧️ Regra Especial de Chuva:</strong>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '12px' }}>
+                    Quando a obra for <strong>PÁTEO</strong> (ou Pátio) e a observação for <strong>CHUVA</strong>, os recursos serão alocados automaticamente em uma obra com o nome de <strong>CHUVA</strong>.
+                  </p>
+                </div>
+              </div>
+              
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+                <button onClick={() => setShowImportModal(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', color: '#475569', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>
+                  Fechar
+                </button>
+                <label className="btn btn-success" style={{ fontSize: '12px', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', margin: 0, display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 'bold', background: '#10b981', color: 'white', border: 'none' }}>
+                  Selecionar Arquivo
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".json,.xlsx,.xls"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        handleImportFile(file);
+                        setShowImportModal(false);
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
         )
       }
     </div >
