@@ -25,7 +25,9 @@ import {
     PieChart,
     Pie,
     Cell,
-    Legend
+    Legend,
+    BarChart,
+    Bar
 } from 'recharts';
 import type { Resource, Worksite, AllocationData, OvertimeData, MaintenanceData, PartialAllocationsData, FuelData, FuelQuoteData, AllocationMetadata } from '../types';
 
@@ -1057,18 +1059,40 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                     </div>
                 </div>
 
-                {/* Gráfico Pizza */}
+                {/* Gráfico de Barras de Custos por Obra */}
                 <div style={{ background: 'white', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
-                    <h3 style={{ fontSize: '13px', fontWeight: '900', color: '#1e293b', marginBottom: '12px' }}>Distribuição Percentual</h3>
+                    <h3 style={{ fontSize: '13px', fontWeight: '900', color: '#1e293b', marginBottom: '12px' }}>Custos por Obra</h3>
                     <div style={{ height: '220px' }}>
                         <ResponsiveContainer width="100%" height="100%">
-                            <PieChart>
-                                <Pie data={stats.pieData} innerRadius={45} outerRadius={65} paddingAngle={5} dataKey="value">
-                                    {stats.pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
-                                </Pie>
-                                <RechartsTooltip formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`} itemSorter={(item) => -(Number(item.value) || 0)} />
-                                <Legend verticalAlign="middle" align="right" layout="vertical" iconType="circle" wrapperStyle={{ fontSize: '10px' }} />
-                            </PieChart>
+                            <BarChart data={stats.pieData} margin={{ top: 10, right: 10, left: 15, bottom: 20 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis 
+                                    dataKey="name" 
+                                    axisLine={false} 
+                                    tickLine={false} 
+                                    tick={{ fontSize: 8, fill: '#64748b' }}
+                                    interval={0}
+                                    angle={-20}
+                                    textAnchor="end"
+                                    height={50}
+                                />
+                                <YAxis 
+                                    axisLine={false} 
+                                    tickLine={false} 
+                                    tick={{ fontSize: 8, fill: '#64748b' }}
+                                    tickFormatter={(val) => `R$ ${Number(val).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`}
+                                />
+                                <RechartsTooltip 
+                                    formatter={(value: any) => `R$ ${Number(value).toLocaleString('pt-BR')}`}
+                                    labelStyle={{ fontWeight: 'bold', fontSize: '10px' }}
+                                    contentStyle={{ fontSize: '10px' }}
+                                />
+                                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                                    {stats.pieData.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={entry.color} />
+                                    ))}
+                                </Bar>
+                            </BarChart>
                         </ResponsiveContainer>
                     </div>
                 </div>
