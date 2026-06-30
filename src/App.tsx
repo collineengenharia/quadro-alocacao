@@ -452,11 +452,11 @@ function App() {
   const sanitizeAppState = (state: any) => {
     if (!state) return state;
 
-    // 1. Ressuscitar máquinas demitidas por engano
+    // 1. Ressuscitar todos os recursos (funcionários e máquinas) demitidos por engano
     if (Array.isArray(state.resources)) {
       state.resources = state.resources.map((r: any) => {
-        if (r.type === 'machine' && r.dismissedAt) {
-          console.log(`[Sanitização] Máquina "${r.name}" reativada.`);
+        if (r.dismissedAt) {
+          console.log(`[Sanitização] Recurso "${r.name}" reativado.`);
           return { ...r, dismissedAt: undefined };
         }
         return r;
@@ -2241,72 +2241,8 @@ function App() {
           }
         }
         
-        // === LÓGICA DE DEMISSÃO AUTOMÁTICA (DISMISSED_AT) COM TOLERÂNCIA DE 5 DIAS ===
-        const sortedImportedDates = Object.keys(groupedByDate).sort();
-        if (sortedImportedDates.length > 0) {
-          const firstImportedDateStr = sortedImportedDates[0];
-          const lastImportedDateStr = sortedImportedDates[sortedImportedDates.length - 1];
-          const firstImportedDate = parseISO(firstImportedDateStr);
-          const lastImportedDate = parseISO(lastImportedDateStr);
-          
-          // Intervalo total de dias na planilha importada
-          const sheetIntervalDays = Math.round(Math.abs(lastImportedDate.getTime() - firstImportedDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-          
-          // Mapear a última data de aparição de cada recurso na planilha
-          const lastAppearedDateMap: { [resId: string]: string } = {};
-          
-          for (const dateKey of sortedImportedDates) {
-            const rowsForDate = groupedByDate[dateKey];
-            for (const row of rowsForDate) {
-              const cleanEmp = cleanEmployeeName(row.employeeName);
-              const emp = updatedResources.find(r => r.type === 'employee' && cleanEmployeeName(r.name) === cleanEmp);
-              if (emp) {
-                lastAppearedDateMap[emp.id] = dateKey;
-              }
-              if (row.machineName) {
-                const cleanMac = cleanMachineName(row.machineName);
-                const machine = updatedResources.find(r => r.type === 'machine' && cleanMachineName(r.name) === cleanMac);
-                if (machine) {
-                  lastAppearedDateMap[machine.id] = dateKey;
-                }
-              }
-            }
-          }
-          
-          // Aplicar regras para cada recurso (funcionários e máquinas)
-          for (const res of updatedResources) {
-            if (res.type === 'machine') {
-              res.dismissedAt = undefined;
-              continue;
-            }
-            const lastAppearedDateStr = lastAppearedDateMap[res.id];
-            
-            if (lastAppearedDateStr) {
-              // O recurso apareceu na planilha importada
-              const lastAppearedDate = parseISO(lastAppearedDateStr);
-              const daysSinceLastAppearance = Math.round(Math.abs(lastImportedDate.getTime() - lastAppearedDate.getTime()) / (1000 * 60 * 60 * 24));
-              
-              // Se a ausência for de 5 dias ou mais em relação ao final da planilha, definimos a demissão para o dia seguinte à última aparição
-              if (daysSinceLastAppearance >= 5) {
-                const nextDayDate = addDays(lastAppearedDate, 1);
-                res.dismissedAt = format(nextDayDate, 'yyyy-MM-dd');
-              } else {
-                // Se ele apareceu no final da planilha (ausência < 5 dias), garantimos que ele continua ativo
-                res.dismissedAt = undefined;
-              }
-            } else {
-              // O recurso NÃO apareceu em nenhum dia da planilha
-              // Só marcamos demissão se a planilha cobrir um período significativo (>= 5 dias)
-              if (sheetIntervalDays >= 5) {
-                // Se ele não tinha data de demissão cadastrada, ou se era posterior ao início do período importado
-                if (!res.dismissedAt || res.dismissedAt >= firstImportedDateStr) {
-                  const nextDayDate = addDays(lastImportedDate, 1);
-                  res.dismissedAt = format(nextDayDate, 'yyyy-MM-dd');
-                }
-              }
-            }
-          }
-        }
+        // A lógica de demissão automática foi removida conforme solicitação do usuário.
+        // As demissões/desativações de funcionários e máquinas agora são geridas manualmente.
         
         // Atualiza os estados do React
         setResources(updatedResources);
