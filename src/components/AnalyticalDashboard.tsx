@@ -1098,15 +1098,16 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                                 stroke={color}
                                                 strokeWidth={2}
                                                 dot={false}
+                                                name={`${w.name} (Diário)`}
                                             />
                                         );
                                     })}
 
                                 {/* Linha do Pátio Opcional */}
                                 {stats.rankingData.some(r => r.name === 'Pátio (Ociosidade)') && (
-                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="5 5" dot={false} />
+                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Pátio (Diário)" />
                                 )}
-                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="3 3" dot={false} name="Chuva" />
+                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="3 3" dot={false} name="Chuva (Diário)" />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
@@ -1138,14 +1139,15 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                                                 stroke={color}
                                                 strokeWidth={2}
                                                 dot={false}
+                                                name={`${w.name} (Acumulado)`}
                                             />
                                         );
                                     })}
                                 {/* Linha do Pátio Opcional */}
                                 {stats.rankingData.some(r => r.name === 'Pátio (Ociosidade)') && (
-                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="5 5" dot={false} />
+                                    <Line type="monotone" dataKey="Pátio" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Pátio (Acumulado)" />
                                 )}
-                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="3 3" dot={false} name="Chuva" />
+                                <Line type="monotone" dataKey="Chuva" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="3 3" dot={false} name="Chuva (Acumulado)" />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>

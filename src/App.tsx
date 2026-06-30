@@ -448,6 +448,86 @@ function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
 
+  // Helper para limpar e corrigir obras duplicadas e máquinas demitidas incorretamente
+  const sanitizeAppState = (state: any) => {
+    if (!state) return state;
+
+    // 1. Ressuscitar máquinas demitidas por engano
+    if (Array.isArray(state.resources)) {
+      state.resources = state.resources.map((r: any) => {
+        if (r.type === 'machine' && r.dismissedAt) {
+          console.log(`[Sanitização] Máquina "${r.name}" reativada.`);
+          return { ...r, dismissedAt: undefined };
+        }
+        return r;
+      });
+    }
+
+    // 2. Encontrar obras duplicadas com nomes do tipo PÁTIO
+    let worksitesList = Array.isArray(state.worksites) ? [...state.worksites] : [];
+    const duplicatePatioSites = worksitesList.filter(w => {
+      const cleanName = w.name.trim().toUpperCase();
+      return w.id !== 'pateo' && (cleanName === 'PÁTIO' || cleanName === 'PATIO' || cleanName === 'PÁTEO' || cleanName === 'PATEO');
+    });
+
+    if (duplicatePatioSites.length > 0) {
+      const duplicateIds = duplicatePatioSites.map(w => w.id);
+      console.log('[Sanitização] Obras duplicadas do Pátio encontradas e removidas:', duplicatePatioSites.map(w => w.name));
+
+      // Remove dos worksites
+      state.worksites = worksitesList.filter(w => !duplicateIds.includes(w.id));
+
+      // Limpar das allocations simples
+      if (state.allocations && typeof state.allocations === 'object') {
+        const newAllocations = { ...state.allocations };
+        Object.keys(newAllocations).forEach(date => {
+          const dayAlloc = { ...newAllocations[date] };
+          let modified = false;
+          Object.keys(dayAlloc).forEach(resId => {
+            if (duplicateIds.includes(dayAlloc[resId])) {
+              dayAlloc[resId] = 'pateo';
+              modified = true;
+            }
+          });
+          if (modified) {
+            newAllocations[date] = dayAlloc;
+          }
+        });
+        state.allocations = newAllocations;
+      }
+
+      // Limpar das alocações parciais
+      if (state.partialAllocations && typeof state.partialAllocations === 'object') {
+        const newPartials = { ...state.partialAllocations };
+        Object.keys(newPartials).forEach(date => {
+          const dayPartialsObj = { ...newPartials[date] };
+          let dateModified = false;
+          Object.keys(dayPartialsObj).forEach(resId => {
+            const resPartials = Array.isArray(dayPartialsObj[resId]) ? [...dayPartialsObj[resId]] : [];
+            let resModified = false;
+            const cleanedResPartials = resPartials.map(p => {
+              if (duplicateIds.includes(p.worksiteId)) {
+                resModified = true;
+                return { ...p, worksiteId: 'pateo' };
+              }
+              return p;
+            });
+            if (resModified) {
+              dayPartialsObj[resId] = cleanedResPartials;
+              dateModified = true;
+            }
+          });
+          if (dateModified) {
+            newPartials[date] = dayPartialsObj;
+          }
+        });
+        state.partialAllocations = newPartials;
+      }
+    }
+
+    return state;
+  };
+
   // === CARREGAR DADOS DO SUPABASE ===
   useEffect(() => {
     if (!user) return;
@@ -468,7 +548,7 @@ function App() {
         }
 
         if (data?.state) {
-          const s = data.state;
+          const s = sanitizeAppState(data.state);
           if (Array.isArray(s.resources)) setResources(s.resources);
           if (Array.isArray(s.worksites) && s.worksites.length > 0) setWorksites(s.worksites);
           else setWorksites(DEFAULT_WORKSITES);
@@ -501,19 +581,36 @@ function App() {
             const savedFuel = localStorage.getItem('colline_fuel_data');
             const savedFuelQuotes = localStorage.getItem('colline_fuel_quotes');
 
-            if (savedResources) { const p = JSON.parse(savedResources); if (Array.isArray(p)) setResources(p); }
-            if (savedWorksites) { const p = JSON.parse(savedWorksites); if (Array.isArray(p) && p.length > 0) setWorksites(p); else setWorksites(DEFAULT_WORKSITES); }
+            const tempState: any = {
+              resources: savedResources ? JSON.parse(savedResources) : null,
+              worksites: savedWorksites ? JSON.parse(savedWorksites) : null,
+              allocations: savedAllocations ? JSON.parse(savedAllocations) : null,
+              observations: savedObservations ? JSON.parse(savedObservations) : null,
+              worksiteVisibility: savedWorksiteVisibility ? JSON.parse(savedWorksiteVisibility) : null,
+              allocationMetadata: savedMetadata ? JSON.parse(savedMetadata) : null,
+              overtime: savedOvertime ? JSON.parse(savedOvertime) : null,
+              resourceLinks: savedLinks ? JSON.parse(savedLinks) : null,
+              maintenanceHistory: savedMaintenance ? JSON.parse(savedMaintenance) : null,
+              partialAllocations: savedPartialAllocations ? JSON.parse(savedPartialAllocations) : null,
+              fuelData: savedFuel ? JSON.parse(savedFuel) : null,
+              fuelQuotes: savedFuelQuotes ? JSON.parse(savedFuelQuotes) : null,
+            };
+
+            const s = sanitizeAppState(tempState);
+
+            if (s.resources && Array.isArray(s.resources)) setResources(s.resources);
+            if (s.worksites && Array.isArray(s.worksites) && s.worksites.length > 0) setWorksites(s.worksites);
             else setWorksites(DEFAULT_WORKSITES);
-            if (savedAllocations) { const p = JSON.parse(savedAllocations); if (p && typeof p === 'object') setAllocations(p); }
-            if (savedObservations) { const p = JSON.parse(savedObservations); if (p && typeof p === 'object') setObservations(p); }
-            if (savedWorksiteVisibility) { const p = JSON.parse(savedWorksiteVisibility); if (p && typeof p === 'object') setWorksiteVisibility(p); }
-            if (savedMetadata) { const p = JSON.parse(savedMetadata); if (p && typeof p === 'object') setAllocationMetadata(p); }
-            if (savedOvertime) { const p = JSON.parse(savedOvertime); if (p && typeof p === 'object') setOvertime(p); }
-            if (savedLinks) { const p = JSON.parse(savedLinks); if (p && typeof p === 'object') setResourceLinks(p); }
-            if (savedMaintenance) { const p = JSON.parse(savedMaintenance); if (p && typeof p === 'object') setMaintenanceHistory(p); }
-            if (savedPartialAllocations) { const p = JSON.parse(savedPartialAllocations); if (p && typeof p === 'object') setPartialAllocations(p); }
-            if (savedFuel) { const p = JSON.parse(savedFuel); if (p && typeof p === 'object') setFuelData(p); }
-            if (savedFuelQuotes) { const p = JSON.parse(savedFuelQuotes); if (p && typeof p === 'object') setFuelQuotes(p); }
+            if (s.allocations) setAllocations(s.allocations);
+            if (s.observations) setObservations(s.observations);
+            if (s.worksiteVisibility) setWorksiteVisibility(s.worksiteVisibility);
+            if (s.allocationMetadata) setAllocationMetadata(s.allocationMetadata);
+            if (s.overtime) setOvertime(s.overtime);
+            if (s.resourceLinks) setResourceLinks(s.resourceLinks);
+            if (s.maintenanceHistory) setMaintenanceHistory(s.maintenanceHistory);
+            if (s.partialAllocations) setPartialAllocations(s.partialAllocations);
+            if (s.fuelData) setFuelData(s.fuelData);
+            if (s.fuelQuotes) setFuelQuotes(s.fuelQuotes);
           } catch (localErr) {
             console.error('Erro ao carregar do localStorage:', localErr);
           }
@@ -1886,7 +1983,7 @@ function App() {
         // Helper para buscar ou criar obra
         const findOrCreateWorksite = (name: string) => {
           const cleanName = name.trim().toUpperCase();
-          if (cleanName === 'PÁTEO' || cleanName === 'PATEO' || cleanName === 'PATIO') {
+          if (cleanName === 'PÁTEO' || cleanName === 'PATEO' || cleanName === 'PATIO' || cleanName === 'PÁTIO') {
             return { id: 'pateo', name: 'PÁTEO' };
           }
           if (cleanName === 'CHUVA') {
@@ -2006,7 +2103,7 @@ function App() {
           let finalWorksiteName = worksiteName;
           const cleanObra = worksiteName.trim().toUpperCase();
           const cleanObs = observation.trim().toUpperCase();
-          if ((cleanObra === 'PÁTEO' || cleanObra === 'PATEO' || cleanObra === 'PATIO') && cleanObs === 'CHUVA') {
+          if ((cleanObra === 'PÁTEO' || cleanObra === 'PATEO' || cleanObra === 'PATIO' || cleanObra === 'PÁTIO') && cleanObs === 'CHUVA') {
             finalWorksiteName = 'CHUVA';
           }
           
@@ -2178,6 +2275,10 @@ function App() {
           
           // Aplicar regras para cada recurso (funcionários e máquinas)
           for (const res of updatedResources) {
+            if (res.type === 'machine') {
+              res.dismissedAt = undefined;
+              continue;
+            }
             const lastAppearedDateStr = lastAppearedDateMap[res.id];
             
             if (lastAppearedDateStr) {
