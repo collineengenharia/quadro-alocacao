@@ -1062,7 +1062,7 @@ export const AnalyticalDashboard: React.FC<AnalyticalDashboardProps> = ({
                 {/* Gráfico de Barras de Custos por Obra */}
                 <div style={{ background: 'white', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 4px 20px rgba(0,0,0,0.03)', border: '1px solid #f1f5f9' }}>
                     <h3 style={{ fontSize: '13px', fontWeight: '900', color: '#1e293b', marginBottom: '12px' }}>Custos por Obra</h3>
-                    <div style={{ height: '220px' }}>
+                    <div style={{ height: '320px' }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <BarChart data={stats.pieData} margin={{ top: 10, right: 10, left: 15, bottom: 20 }}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
